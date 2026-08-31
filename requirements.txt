@@ -5,3 +5,5 @@ xgboost
 scikit-learn
 joblib
 hopsworks
+plotly
+python-dotenv

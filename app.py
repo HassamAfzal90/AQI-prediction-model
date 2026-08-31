@@ -1,4 +1,3 @@
-
 import streamlit as st
 import pandas as pd
 import numpy as np
@@ -9,11 +8,205 @@ import re
 import sys
 import types
 import requests
+import plotly.graph_objects as go
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
+from pathlib import Path
 
-st.set_page_config(page_title="Sargodha AQI Live Forecast", layout="wide")
+
+def load_env_file(env_path: Path):
+    if not env_path.exists():
+        return
+    for line in env_path.read_text(encoding="utf-8").splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, value = line.split("=", 1)
+        key = key.strip()
+        value = value.strip().strip('"').strip("'")
+        if key and value and key not in os.environ:
+            os.environ[key] = value
+
+
+for candidate in [Path.cwd() / ".env", Path(__file__).resolve().parent / ".env"]:
+    load_env_file(candidate)
+
+try:
+    from dotenv import load_dotenv
+    load_dotenv(dotenv_path=Path(__file__).resolve().parent / ".env", override=False)
+except Exception:
+    pass
+
+st.set_page_config(
+    page_title="10Pearl AQI Predictors — Sargodha",
+    page_icon="🌬️",
+    layout="wide",
+    initial_sidebar_state="expanded",
+)
+
+# ============================================================
+# GLOBAL STYLING
+# ============================================================
+st.markdown("""
+<style>
+    @import url('https://fonts.googleapis.com/css2?family=Poppins:wght@400;500;600;700;800&display=swap');
+
+    html, body, [class*="css"]  {
+        font-family: 'Poppins', sans-serif;
+    }
+
+    /* Force dark background regardless of Streamlit's own theme / DOM version */
+    [data-testid="stAppViewContainer"], [data-testid="stMain"], .main, .stApp {
+        background: radial-gradient(circle at top left, #101827 0%, #05070d 60%) !important;
+    }
+    [data-testid="stHeader"] {
+        background: rgba(0,0,0,0) !important;
+    }
+    body, p, span, div, label, h1, h2, h3, h4, h5, h6 {
+        color: #e6edf3;
+    }
+
+    /* Hero header */
+    .hero-box {
+        background: linear-gradient(135deg, #0f2027 0%, #203a43 50%, #2c5364 100%);
+        padding: 28px 32px;
+        border-radius: 20px;
+        border: 1px solid rgba(255,255,255,0.08);
+        box-shadow: 0 8px 32px rgba(0,0,0,0.35);
+        margin-bottom: 24px;
+    }
+    .hero-title {
+        font-size: 34px;
+        font-weight: 800;
+        color: #ffffff !important;
+        margin: 0;
+    }
+    .brand-tag {
+        display: inline-block;
+        font-size: 12px;
+        font-weight: 700;
+        letter-spacing: 2px;
+        color: #7fd8ff !important;
+        background: rgba(127,216,255,0.12);
+        border: 1px solid rgba(127,216,255,0.35);
+        padding: 4px 12px;
+        border-radius: 999px;
+        margin-bottom: 10px;
+    }
+    .hero-sub {
+        font-size: 15px;
+        color: #c9d6df !important;
+        margin-top: 6px;
+    }
+
+    /* Metric cards — solid background so text is always visible, independent of theme */
+    .metric-card {
+        background: #131c2e;
+        border: 1px solid rgba(255,255,255,0.1);
+        border-radius: 16px;
+        padding: 18px;
+        text-align: center;
+        transition: transform 0.2s ease;
+    }
+    .metric-card:hover {
+        transform: translateY(-4px);
+        border-color: rgba(255,255,255,0.3);
+    }
+    .metric-label {
+        font-size: 13px;
+        color: #9fb0c3 !important;
+        text-transform: uppercase;
+        letter-spacing: 1px;
+        margin-bottom: 6px;
+    }
+    .metric-value {
+        font-size: 28px;
+        font-weight: 700;
+        color: #ffffff !important;
+    }
+
+    /* Big AQI display */
+    .aqi-hero {
+        border-radius: 24px;
+        padding: 34px;
+        text-align: center;
+        margin-bottom: 10px;
+        box-shadow: 0 12px 40px rgba(0,0,0,0.4);
+        border: 1px solid rgba(255,255,255,0.12);
+        background-color: #10192b;
+    }
+    .aqi-hero-number {
+        font-size: 96px;
+        font-weight: 800;
+        line-height: 1;
+        text-shadow: 0 4px 20px rgba(0,0,0,0.4);
+    }
+    .aqi-hero-label {
+        font-size: 22px;
+        font-weight: 600;
+        margin-top: 6px;
+        letter-spacing: 0.5px;
+    }
+    .aqi-hero-date {
+        font-size: 14px;
+        color: rgba(255,255,255,0.85) !important;
+        margin-top: 4px;
+    }
+
+    .day-tag {
+        display: inline-block;
+        padding: 4px 14px;
+        border-radius: 999px;
+        background: rgba(255,255,255,0.15);
+        color: #fff !important;
+        font-size: 12px;
+        font-weight: 600;
+        margin-bottom: 10px;
+    }
+
+    .hazard-banner {
+        padding: 20px 26px;
+        border-radius: 16px;
+        font-size: 17px;
+        font-weight: 600;
+        color: white !important;
+        margin: 18px 0;
+        animation: pulseGlow 1.8s infinite;
+        border: 1px solid rgba(255,255,255,0.2);
+    }
+    @keyframes pulseGlow {
+        0%   { box-shadow: 0 0 0px rgba(255,0,0,0.4); }
+        50%  { box-shadow: 0 0 28px rgba(255,0,0,0.55); }
+        100% { box-shadow: 0 0 0px rgba(255,0,0,0.4); }
+    }
+
+    section[data-testid="stSidebar"] {
+        background: linear-gradient(180deg, #0b1220 0%, #05070d 100%) !important;
+        border-right: 1px solid rgba(255,255,255,0.08);
+    }
+    section[data-testid="stSidebar"] * {
+        color: #e6edf3 !important;
+    }
+
+    div.stButton > button {
+        border-radius: 12px;
+        font-weight: 600;
+        padding: 10px 18px;
+        border: none;
+        background: linear-gradient(135deg, #2c5364, #0f2027);
+        color: white !important;
+        transition: 0.2s ease;
+    }
+    div.stButton > button:hover {
+        transform: translateY(-2px);
+        box-shadow: 0 6px 18px rgba(44,83,100,0.5);
+    }
+
+    ::-webkit-scrollbar { width: 8px; }
+    ::-webkit-scrollbar-thumb { background: #2c5364; border-radius: 10px; }
+</style>
+""", unsafe_allow_html=True)
 
 
 def create_requests_session(retries=3, backoff_factor=1.0):
@@ -46,12 +239,84 @@ def ensure_sklearn_loss_compat():
 
 ensure_sklearn_loss_compat()
 
-st.title("🌬️ Sargodha AQI 3-Day Live Forecast System")
-st.markdown(f"**Current Date:** {datetime.now().strftime('%A, %d %B %Y')} | **Location:** Sargodha, Punjab")
+# ============================================================
+# AQI CATEGORY HELPERS (US AQI breakpoints)
+# ============================================================
+def get_aqi_category(aqi):
+    """Return (label, color_hex, emoji, advisory) for a given US AQI value."""
+    if aqi <= 50:
+        return "Good", "#2ecc71", "🟢", "Air quality is satisfactory. Enjoy outdoor activities."
+    elif aqi <= 100:
+        return "Moderate", "#f1c40f", "🟡", "Acceptable, but sensitive groups should watch symptoms."
+    elif aqi <= 150:
+        return "Unhealthy for Sensitive Groups", "#e67e22", "🟠", "Children, elderly & respiratory patients should limit outdoor exertion."
+    elif aqi <= 200:
+        return "Unhealthy", "#e74c3c", "🔴", "Everyone may experience health effects. Reduce prolonged outdoor exertion."
+    elif aqi <= 300:
+        return "Very Unhealthy", "#8e44ad", "🟣", "Health alert! Avoid outdoor activity, wear a mask if going outside."
+    else:
+        return "Hazardous", "#7d1414", "🟤", "Emergency conditions! Stay indoors, use air purifiers, avoid all outdoor exposure."
 
-# Sidebar Configuration
-st.sidebar.header("🔑 Hopsworks Connection")
-api_key = st.sidebar.text_input("Hopsworks API Key", type="password")
+
+def aqi_gauge_chart(value, title):
+    label, color, emoji, _ = get_aqi_category(value)
+    fig = go.Figure(go.Indicator(
+        mode="gauge+number",
+        value=value,
+        number={'font': {'size': 40, 'color': color}},
+        title={'text': f"{emoji} {title}", 'font': {'size': 16, 'color': '#dfe9f3'}},
+        gauge={
+            'axis': {'range': [0, 500], 'tickcolor': '#8fa3b3', 'tickwidth': 1},
+            'bar': {'color': color, 'thickness': 0.35},
+            'bgcolor': "rgba(0,0,0,0)",
+            'borderwidth': 0,
+            'steps': [
+                {'range': [0, 50], 'color': 'rgba(46,204,113,0.25)'},
+                {'range': [50, 100], 'color': 'rgba(241,196,15,0.25)'},
+                {'range': [100, 150], 'color': 'rgba(230,126,34,0.25)'},
+                {'range': [150, 200], 'color': 'rgba(231,76,60,0.25)'},
+                {'range': [200, 300], 'color': 'rgba(142,68,173,0.25)'},
+                {'range': [300, 500], 'color': 'rgba(125,20,20,0.25)'},
+            ],
+        }
+    ))
+    fig.update_layout(
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(0,0,0,0)",
+        font={'color': "#dfe9f3"},
+        height=260,
+        margin=dict(l=20, r=20, t=50, b=10),
+    )
+    return fig
+
+
+# ============================================================
+# HERO HEADER
+# ============================================================
+st.markdown(f"""
+<div class="hero-box">
+    <p class="brand-tag">10PEARL AQI PREDICTORS</p>
+    <p class="hero-title">🌬️ Sargodha AQI — 3-Day Live Forecast System</p>
+    <p class="hero-sub">📍 Sargodha, Punjab, Pakistan &nbsp;|&nbsp; 🗓️ {datetime.now().strftime('%A, %d %B %Y')} &nbsp;|&nbsp; Powered by Hopsworks + Open-Meteo</p>
+</div>
+""", unsafe_allow_html=True)
+
+# ============================================================
+# HOPSWORKS API KEY — read from environment/.env
+# ============================================================
+st.sidebar.markdown("## 🔑 Hopsworks Connection")
+api_key = os.environ.get("HOPSWORKS_API_KEY")
+if api_key:
+    st.sidebar.success("✅ Hopsworks API key loaded from environment")
+else:
+    st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in terminal or .env before running.")
+st.sidebar.markdown("---")
+st.sidebar.markdown("### ℹ️ About")
+st.sidebar.info(
+    "This dashboard pulls live weather & air-quality data from Open-Meteo, "
+    "assembles model features, and runs 3 pre-trained Gradient Boosting "
+    "models (Day 1 / Day 2 / Day 3) hosted on Hopsworks to forecast AQI."
+)
 
 # Sargodha Coordinates
 LATITUDE = 32.0836
@@ -211,7 +476,7 @@ def build_feature_vector(historical, forecast_daily, feature_names):
 @st.cache_data(ttl=600)
 def fetch_live_weather_and_aqi():
     data = {"pm25": 45.0, "pm10": 90.0, "temp": 30.0, "humidity": 55.0, "wind": 10.0}
-    
+
     # Weather Fetch
     session = create_requests_session(retries=3, backoff_factor=0.5)
     try:
@@ -259,14 +524,14 @@ def load_all_models(key):
         project="colab"
     )
     mr = project.get_model_registry()
-    
+
     models_dict = {}
     model_info = [
         ("sargodha_aqi_gbr_day1", 4, "Day 1"),
         ("sargodha_aqi_gbr_day2", 3, "Day 2"),
         ("sargodha_aqi_gbr_day3", 3, "Day 3")
     ]
-    
+
     for m_name, m_ver, label in model_info:
         model_meta = mr.get_model(m_name, version=m_ver)
         model_dir = model_meta.download()
@@ -297,7 +562,7 @@ def load_all_models(key):
             "model": model_obj,
             "features": feature_names,
         }
-                
+
     return models_dict
 
 models = None
@@ -308,58 +573,172 @@ if api_key:
     except Exception as e:
         st.sidebar.error(f"Error loading models: {e}")
 else:
-    st.info("👈 Left sidebar mein Hopsworks API Key enter karein.")
+    st.info("👈 HOPSWORKS_API_KEY set nahi hai. Terminal me export karo ya project root me .env file create karo.")
 
 # --- 3. LIVE DATA UI ---
-st.subheader("📡 Live Weather & Air Quality Data")
-if st.button("🔄 Refresh Live API Data"):
-    st.cache_data.clear()
+st.markdown("### 📡 Live Weather & Air Quality — Sargodha")
+
+col_refresh, _ = st.columns([1, 5])
+with col_refresh:
+    if st.button("🔄 Refresh Live Data"):
+        st.cache_data.clear()
 
 live_data = fetch_live_weather_and_aqi()
 
 m1, m2, m3, m4, m5 = st.columns(5)
-m1.metric("Current PM2.5", f"{live_data['pm25']} µg/m³")
-m2.metric("Current PM10", f"{live_data['pm10']} µg/m³")
-m3.metric("Temperature", f"{live_data['temp']} °C")
-m4.metric("Humidity", f"{live_data['humidity']} %")
-m5.metric("Wind Speed", f"{live_data['wind']} km/h")
+metric_defs = [
+    (m1, "PM2.5", f"{live_data['pm25']:.1f} µg/m³", "🫧"),
+    (m2, "PM10", f"{live_data['pm10']:.1f} µg/m³", "🌫️"),
+    (m3, "Temperature", f"{live_data['temp']:.1f} °C", "🌡️"),
+    (m4, "Humidity", f"{live_data['humidity']:.0f} %", "💧"),
+    (m5, "Wind Speed", f"{live_data['wind']:.1f} km/h", "🍃"),
+]
+for col, label, value, icon in metric_defs:
+    with col:
+        st.markdown(f"""
+        <div class="metric-card">
+            <div class="metric-label">{icon} {label}</div>
+            <div class="metric-value">{value}</div>
+        </div>
+        """, unsafe_allow_html=True)
 
 st.divider()
 
 # --- 4. PREDICTION & ALARMING ALERT SYSTEM ---
-if st.button("🚀 Run 3-Day AQI Forecast", type="primary"):
+st.markdown("### 🚀 Run Forecast")
+run_forecast = st.button("🚀 Run 3-Day AQI Forecast", type="primary")
+
+if run_forecast:
     if not models or len(models) < 3:
-        st.error("Models load nahi hue! Sidebar me API Key verify karein.")
+        st.error("Models load nahi hue! HOPSWORKS_API_KEY environment variable verify karo.")
     else:
         try:
-            historical = fetch_historical_daily_data(LATITUDE, LONGITUDE)
-            forecast_daily = fetch_forecast_weather(LATITUDE, LONGITUDE, horizon_days=5)
+            with st.spinner("Fetching historical & forecast weather data, building features, running models..."):
+                historical = fetch_historical_daily_data(LATITUDE, LONGITUDE)
+                forecast_daily = fetch_forecast_weather(LATITUDE, LONGITUDE, horizon_days=5)
 
-            preds = []
-            for horizon_label, label in [("Day 1", "Day 1"), ("Day 2", "Day 2"), ("Day 3", "Day 3")]:
-                model_info = models[label]
-                model = model_info["model"]
-                feature_names = model_info["features"]
-                x_vec = build_feature_vector(historical, forecast_daily, feature_names)
-                preds.append(float(model.predict(x_vec)[0]))
+                preds = []
+                for label in ["Day 1", "Day 2", "Day 3"]:
+                    model_info = models[label]
+                    model = model_info["model"]
+                    feature_names = model_info["features"]
+                    x_vec = build_feature_vector(historical, forecast_daily, feature_names)
+                    preds.append(float(model.predict(x_vec)[0]))
 
             today = datetime.now()
-            dates = [(today + timedelta(days=i+1)).strftime("%Y-%m-%d (%A)") for i in range(3)]
-            preds = [round(v, 2) for v in preds]
+            dates = [(today + timedelta(days=i + 1)) for i in range(3)]
+            date_labels = [d.strftime("%d %b (%a)") for d in dates]
+            preds = [round(v, 1) for v in preds]
 
-            df_res = pd.DataFrame({"Forecast Date": dates, "Predicted AQI": preds})
-
-            st.subheader("📅 3-Day AQI Predictions")
-            st.dataframe(df_res, use_container_width=True)
-            st.line_chart(df_res.set_index("Forecast Date"))
-
+            # ---------------- HAZARD BANNER ----------------
             max_aqi = max(preds)
+            worst_day_idx = preds.index(max_aqi)
+            worst_label, worst_color, worst_emoji, worst_advisory = get_aqi_category(max_aqi)
+
             if max_aqi > 200:
-                st.error(f"🚨 **SEVERE HAZARDOUS ALARM!** Projected AQI will reach **{max_aqi}**. Air quality is very unhealthy/hazardous!")
+                st.markdown(f"""
+                <div class="hazard-banner" style="background: linear-gradient(135deg, #7d1414, #b71c1c);">
+                    🚨 SEVERE ALERT — {worst_label.upper()} AIR EXPECTED ON {date_labels[worst_day_idx]}!<br>
+                    Peak Predicted AQI: <b>{max_aqi}</b> {worst_emoji} &nbsp;|&nbsp; {worst_advisory}
+                </div>
+                """, unsafe_allow_html=True)
             elif max_aqi > 150:
-                st.warning(f"⚠️ **UNHEALTHY AIR QUALITY ALERT!** Projected AQI will reach **{max_aqi}**. Mask recommended.")
+                st.markdown(f"""
+                <div class="hazard-banner" style="background: linear-gradient(135deg, #e67e22, #d35400);">
+                    ⚠️ UNHEALTHY AIR QUALITY WARNING — {date_labels[worst_day_idx]}<br>
+                    Peak Predicted AQI: <b>{max_aqi}</b> {worst_emoji} &nbsp;|&nbsp; {worst_advisory}
+                </div>
+                """, unsafe_allow_html=True)
+            elif max_aqi > 100:
+                st.markdown(f"""
+                <div class="hazard-banner" style="background: linear-gradient(135deg, #f39c12, #f1c40f); color:#3a2c00;">
+                    🟡 MODERATE ALERT — Sensitive groups take care on {date_labels[worst_day_idx]}<br>
+                    Peak Predicted AQI: <b>{max_aqi}</b> {worst_emoji}
+                </div>
+                """, unsafe_allow_html=True)
             else:
-                st.success(f"✅ **ACCEPTABLE AIR QUALITY.** Maximum predicted AQI is **{max_aqi}**.")
+                st.success(f"✅ **ACCEPTABLE AIR QUALITY.** Maximum predicted AQI over next 3 days is **{max_aqi}** {worst_emoji}")
+
+            # ---------------- BIG AQI HERO CARDS ----------------
+            st.markdown("### 📅 3-Day AQI Forecast")
+            hcols = st.columns(3)
+            for i, col in enumerate(hcols):
+                label, color, emoji, advisory = get_aqi_category(preds[i])
+                with col:
+                    st.markdown(f"""
+                    <div class="aqi-hero" style="background: linear-gradient(160deg, {color}33, {color}0d);">
+                        <span class="day-tag">📆 Day {i+1} · {date_labels[i]}</span>
+                        <div class="aqi-hero-number" style="color:{color};">{preds[i]:.0f}</div>
+                        <div class="aqi-hero-label" style="color:{color};">{emoji} {label}</div>
+                        <div class="aqi-hero-date">{advisory}</div>
+                    </div>
+                    """, unsafe_allow_html=True)
+
+            # ---------------- GAUGE CHARTS ----------------
+            st.markdown("### 🧭 AQI Gauges")
+            gcols = st.columns(3)
+            for i, col in enumerate(gcols):
+                with col:
+                    st.plotly_chart(aqi_gauge_chart(preds[i], f"Day {i+1} — {date_labels[i]}"), use_container_width=True)
+
+            # ---------------- TREND CHART: HISTORY + FORECAST ----------------
+            st.markdown("### 📈 AQI Trend — Last 14 Days + 3-Day Model Forecast")
+
+            hist_tail = historical.tail(14).copy()
+            hist_dates = list(hist_tail.index.date)
+            hist_values = list(hist_tail["AQI"].values)
+
+            trend_fig = go.Figure()
+
+            # Historical actual AQI
+            trend_fig.add_trace(go.Scatter(
+                x=hist_dates,
+                y=hist_values,
+                mode="lines+markers",
+                name="Historical AQI",
+                line=dict(color="#5dade2", width=3),
+                marker=dict(size=6),
+            ))
+
+            # Bridge point connecting history to forecast
+            bridge_x = [hist_dates[-1]] + [d.date() for d in dates]
+            bridge_y = [hist_values[-1]] + preds
+
+            trend_fig.add_trace(go.Scatter(
+                x=bridge_x,
+                y=bridge_y,
+                mode="lines+markers",
+                name="Model Forecast",
+                line=dict(color="#f39c12", width=3, dash="dash"),
+                marker=dict(size=10, symbol="diamond"),
+            ))
+
+            # Hazard threshold reference lines
+            for level, color, name in [(100, "#f1c40f", "Moderate"), (150, "#e67e22", "Unhealthy (Sensitive)"),
+                                        (200, "#e74c3c", "Unhealthy"), (300, "#8e44ad", "Very Unhealthy")]:
+                trend_fig.add_hline(y=level, line_dash="dot", line_color=color, opacity=0.5,
+                                     annotation_text=name, annotation_font_color=color, annotation_font_size=10)
+
+            trend_fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(255,255,255,0.02)",
+                font=dict(color="#dfe9f3"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=10, r=10, t=40, b=10),
+                xaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="Date"),
+                yaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="AQI"),
+                height=420,
+            )
+            st.plotly_chart(trend_fig, use_container_width=True)
+
+            # ---------------- RAW TABLE ----------------
+            with st.expander("📋 View Raw Forecast Table"):
+                df_res = pd.DataFrame({
+                    "Forecast Date": date_labels,
+                    "Predicted AQI": preds,
+                    "Category": [get_aqi_category(p)[0] for p in preds],
+                })
+                st.dataframe(df_res, use_container_width=True, hide_index=True)
 
         except Exception as err:
             st.error(f"Prediction Error: {err}")
