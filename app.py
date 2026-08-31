@@ -302,14 +302,42 @@ st.markdown(f"""
 """, unsafe_allow_html=True)
 
 # ============================================================
-# HOPSWORKS API KEY — read from environment/.env
+# HOPSWORKS API KEY — read from env / .env / Streamlit secrets
+# and allow manual entry in the sidebar for deployment use.
 # ============================================================
+def resolve_hopsworks_api_key():
+    # 1) environment or .env file
+    env_key = os.environ.get("HOPSWORKS_API_KEY")
+    if env_key and str(env_key).strip():
+        return str(env_key).strip()
+
+    # 2) Streamlit Community Cloud secret
+    try:
+        secret_key = st.secrets.get("HOPSWORKS_API_KEY")
+        if secret_key and str(secret_key).strip():
+            return str(secret_key).strip()
+    except Exception:
+        pass
+
+    # 3) manual input in sidebar
+    sidebar_key = st.sidebar.text_input(
+        "Hopsworks API key",
+        type="password",
+        help="Paste Hopsworks key here if it is not loaded from the environment or Streamlit secrets.",
+        key="hopsworks_api_key_input",
+    )
+    if sidebar_key and str(sidebar_key).strip():
+        return str(sidebar_key).strip()
+
+    return None
+
+
 st.sidebar.markdown("## 🔑 Hopsworks Connection")
-api_key = os.environ.get("HOPSWORKS_API_KEY")
+api_key = resolve_hopsworks_api_key()
 if api_key:
-    st.sidebar.success("✅ Hopsworks API key loaded from environment")
+    st.sidebar.success("✅ Hopsworks API key loaded.")
 else:
-    st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in terminal or .env before running.")
+    st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in .env, Streamlit secrets, or paste it here.")
 st.sidebar.markdown("---")
 st.sidebar.markdown("### ℹ️ About")
 st.sidebar.info(

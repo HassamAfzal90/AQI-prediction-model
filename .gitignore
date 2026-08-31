@@ -4,3 +4,4 @@ retrain_artifacts/
 .vscode/
 .streamlit/secrets.toml
 .streamlit/*.swp
+.streamlit/secrets.toml
