@@ -307,7 +307,13 @@ st.markdown(f"""
 st.sidebar.markdown("## 🔑 Hopsworks Connection")
 api_key = os.environ.get("HOPSWORKS_API_KEY")
 if api_key:
-    st.sidebar.success("✅ Hopsworks API key loaded from environment")
+    try:
+        models = load_all_models(api_key)
+        st.sidebar.success("✅ Day 1, 2, 3 Models Ready!")
+    except Exception as e:
+        st.sidebar.error(f"Error loading models: {e}")
+        import traceback
+        st.sidebar.code(traceback.format_exc())
 else:
     st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in terminal or .env before running.")
 st.sidebar.markdown("---")
@@ -572,6 +578,8 @@ if api_key:
         st.sidebar.success("✅ Day 1, 2, 3 Models Ready!")
     except Exception as e:
         st.sidebar.error(f"Error loading models: {e}")
+        import traceback
+        st.sidebar.code(traceback.format_exc())
 else:
     st.info("👈 HOPSWORKS_API_KEY set nahi hai. Terminal me export karo ya project root me .env file create karo.")
 
