@@ -307,13 +307,7 @@ st.markdown(f"""
 st.sidebar.markdown("## 🔑 Hopsworks Connection")
 api_key = os.environ.get("HOPSWORKS_API_KEY")
 if api_key:
-    try:
-        models = load_all_models(api_key)
-        st.sidebar.success("✅ Day 1, 2, 3 Models Ready!")
-    except Exception as e:
-        st.sidebar.error(f"Error loading models: {e}")
-        import traceback
-        st.sidebar.code(traceback.format_exc())
+    st.sidebar.success("✅ Hopsworks API key loaded from environment")
 else:
     st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in terminal or .env before running.")
 st.sidebar.markdown("---")
