@@ -5,25 +5,69 @@ on:
     - cron: '0 2 * * *'  # daily at 02:00 UTC
   workflow_dispatch: {}
 
+permissions:
+  contents: read
+
 jobs:
   retrain:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout repository
-        uses: actions/checkout@v4
+        uses: actions/checkout@v5
 
       - name: Set up Python
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v6
         with:
-          python-version: '3.12'
+          python-version: '3.11'
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Validate required secrets
+        env:
+          HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
+        run: |
+          if [ -z "${HOPSWORKS_API_KEY}" ]; then
+            echo "::error::HOPSWORKS_API_KEY is missing. Add it to GitHub repository secrets before the retraining job runs."
+            exit 1
+          fi
 
       - name: Install dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements.txt
+          python -m pip install -r requirements.txt
+          python -m pip install "hopsworks==5.0.*"
+
+      - name: Verify dependencies
+        run: |
+          python -c "import hopsworks, joblib, numpy, pandas, requests, sklearn; print('Dependencies loaded successfully'); print('Hopsworks version:', hopsworks.__version__)"
 
       - name: Run retraining script
         env:
           HOPSWORKS_API_KEY: ${{ secrets.HOPSWORKS_API_KEY }}
         run: |
           python retrain.py
+
+  notify:
+    if: ${{ always() && env.GMAIL_USERNAME != '' && env.GMAIL_APP_PASSWORD != '' }}
+    needs: retrain
+    runs-on: ubuntu-latest
+    env:
+      GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
+      GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
+    steps:
+      - name: Send Gmail notification
+        uses: dawidd6/action-send-mail@v3
+        with:
+          server_address: smtp.gmail.com
+          server_port: 465
+          secure: true
+          username: ${{ secrets.GMAIL_USERNAME }}
+          password: ${{ secrets.GMAIL_APP_PASSWORD }}
+          subject: "AQI retraining workflow: ${{ needs.retrain.result }}"
+          to: 70169383@student.uol.edu.pk
+          from: "AQI Retraining <${{ secrets.GMAIL_USERNAME }}>"
+          body: |
+            The AQI model retraining workflow finished with status: ${{ needs.retrain.result }}.
+            Repository: ${{ github.repository }}
+            Commit: ${{ github.sha }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}

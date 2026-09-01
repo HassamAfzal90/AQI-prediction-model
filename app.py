@@ -8,6 +8,7 @@ import re
 import sys
 import types
 import requests
+import shap
 import plotly.graph_objects as go
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
@@ -286,6 +287,57 @@ def aqi_gauge_chart(value, title):
         font={'color': "#dfe9f3"},
         height=260,
         margin=dict(l=20, r=20, t=50, b=10),
+    )
+    return fig
+
+
+# ============================================================
+# SHAP EXPLAINABILITY HELPERS
+# ============================================================
+@st.cache_resource(show_spinner=False)
+def get_shap_explainer(_model):
+    """Build (and cache) a SHAP TreeExplainer for a given GradientBoosting model."""
+    return shap.TreeExplainer(_model)
+
+
+def compute_shap_for_day(model, feature_names, x_vec):
+    """Return a DataFrame of feature -> SHAP contribution for one prediction."""
+    explainer = get_shap_explainer(model)
+    shap_values = explainer.shap_values(x_vec)
+    base_value = explainer.expected_value
+    if isinstance(base_value, (list, np.ndarray)):
+        base_value = float(np.array(base_value).flatten()[0])
+
+    contrib = pd.DataFrame({
+        "feature": feature_names,
+        "shap_value": np.array(shap_values).flatten(),
+    })
+    contrib["abs_val"] = contrib["shap_value"].abs()
+    contrib = contrib.sort_values("abs_val", ascending=False)
+    return contrib, base_value
+
+
+def shap_bar_chart(contrib_df, title, top_n=10):
+    plot_df = contrib_df.head(top_n).sort_values("shap_value")
+    colors = ["#e74c3c" if v > 0 else "#2ecc71" for v in plot_df["shap_value"]]
+
+    fig = go.Figure(go.Bar(
+        x=plot_df["shap_value"],
+        y=plot_df["feature"],
+        orientation="h",
+        marker=dict(color=colors),
+        text=[f"{v:+.2f}" for v in plot_df["shap_value"]],
+        textposition="outside",
+    ))
+    fig.update_layout(
+        title=dict(text=title, font=dict(size=15, color="#dfe9f3")),
+        paper_bgcolor="rgba(0,0,0,0)",
+        plot_bgcolor="rgba(255,255,255,0.02)",
+        font=dict(color="#dfe9f3"),
+        xaxis=dict(title="Impact on predicted AQI", gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.2)"),
+        yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
+        margin=dict(l=10, r=40, t=50, b=10),
+        height=380,
     )
     return fig
 
@@ -648,17 +700,26 @@ if run_forecast:
                 forecast_daily = fetch_forecast_weather(LATITUDE, LONGITUDE, horizon_days=5)
 
                 preds = []
+                x_vectors = {}  # keep feature vectors for SHAP, keyed by day label
                 for label in ["Day 1", "Day 2", "Day 3"]:
                     model_info = models[label]
                     model = model_info["model"]
                     feature_names = model_info["features"]
                     x_vec = build_feature_vector(historical, forecast_daily, feature_names)
+                    x_vectors[label] = x_vec
                     preds.append(float(model.predict(x_vec)[0]))
+
+            # stash results in session_state so the SHAP expander below can reuse them
+            # without re-fetching data on every rerun
+            st.session_state["last_preds"] = preds
+            st.session_state["last_x_vectors"] = x_vectors
+            st.session_state["last_historical"] = historical
 
             today = datetime.now()
             dates = [(today + timedelta(days=i + 1)) for i in range(3)]
             date_labels = [d.strftime("%d %b (%a)") for d in dates]
             preds = [round(v, 1) for v in preds]
+            st.session_state["last_date_labels"] = date_labels
 
             # ---------------- HAZARD BANNER ----------------
             max_aqi = max(preds)
@@ -772,3 +833,75 @@ if run_forecast:
 
         except Exception as err:
             st.error(f"Prediction Error: {err}")
+
+# ============================================================
+# 5. SHAP EXPLAINABILITY SECTION
+# Renders using the last forecast run (stored in session_state),
+# so it survives Streamlit reruns without recomputing predictions.
+# ============================================================
+if "last_preds" in st.session_state and models:
+    st.divider()
+    st.markdown("### 🔍 Why did the model predict this? (SHAP Explainability)")
+    st.caption(
+        "Each bar shows how much a feature pushed the predicted AQI up (red) or down (green) "
+        "compared to the model's average prediction, for the selected day."
+    )
+
+    with st.expander("📊 View SHAP Feature Contributions", expanded=False):
+        day_choice = st.radio(
+            "Select forecast day",
+            options=["Day 1", "Day 2", "Day 3"],
+            horizontal=True,
+            key="shap_day_choice",
+        )
+
+        day_idx = int(day_choice.split(" ")[1]) - 1
+        model_info = models[day_choice]
+        model = model_info["model"]
+        feature_names = model_info["features"]
+        x_vec = st.session_state["last_x_vectors"][day_choice]
+        pred_value = st.session_state["last_preds"][day_idx]
+        date_label = st.session_state["last_date_labels"][day_idx]
+
+        try:
+            with st.spinner("Computing SHAP values..."):
+                contrib_df, base_value = compute_shap_for_day(model, feature_names, x_vec)
+
+            top_n = min(10, len(contrib_df))
+            st.plotly_chart(
+                shap_bar_chart(contrib_df, f"Top {top_n} Feature Contributions — {day_choice} ({date_label})", top_n=top_n),
+                use_container_width=True,
+            )
+
+            c1, c2, c3 = st.columns(3)
+            with c1:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Model Base Value</div>
+                    <div class="metric-value">{base_value:.1f}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with c2:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Sum of Contributions</div>
+                    <div class="metric-value">{contrib_df['shap_value'].sum():.1f}</div>
+                </div>
+                """, unsafe_allow_html=True)
+            with c3:
+                st.markdown(f"""
+                <div class="metric-card">
+                    <div class="metric-label">Final Prediction</div>
+                    <div class="metric-value">{pred_value:.1f}</div>
+                </div>
+                """, unsafe_allow_html=True)
+
+            with st.expander("📋 View Full Feature Contribution Table"):
+                display_df = contrib_df[["feature", "shap_value"]].reset_index(drop=True)
+                display_df.columns = ["Feature", "SHAP Contribution"]
+                st.dataframe(display_df, use_container_width=True, hide_index=True)
+
+        except Exception as shap_err:
+            st.error(f"SHAP computation error: {shap_err}")
+else:
+    st.caption("Run a forecast above to unlock SHAP explainability.")

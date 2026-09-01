@@ -352,11 +352,30 @@ def run_retrain():
     if not api_key:
         raise RuntimeError("HOPSWORKS_API_KEY is required in the environment.")
 
-    project = hopsworks.login(
-        host="eu-west.cloud.hopsworks.ai",
-        api_key_value=api_key,
-        project="colab",
-    )
+    try:
+        project = hopsworks.login(
+            host="eu-west.cloud.hopsworks.ai",
+            api_key_value=api_key,
+            project="colab",
+        )
+    except Exception as e:
+        # Provide clearer debug output for hopsworks login failures seen in CI
+        print("Failed to login to Hopsworks:", repr(e))
+        resp = getattr(e, "response", None)
+        try:
+            if resp is not None:
+                print("Exception response type:", type(resp))
+                if hasattr(resp, "text"):
+                    print("Response text:", resp.text)
+                elif hasattr(resp, "content"):
+                    print("Response content:", resp.content)
+                else:
+                    print("Response repr:", repr(resp))
+        except Exception as ex2:
+            print("Error while printing response details:", repr(ex2))
+        # Re-raise to keep behavior the same but with additional logs
+        raise
+
     mr = project.get_model_registry()
 
     raw_df = load_raw_data()

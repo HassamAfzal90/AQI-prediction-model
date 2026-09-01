@@ -1,7 +1,10 @@
-
-numpy==1.26.4
-pandas==2.1.4
-scikit-learn==1.5.2
-joblib==1.4.2
-requests==2.32.3
-hopsworks==4.2.10
+streamlit
+pandas
+numpy
+xgboost
+scikit-learn
+joblib
+hopsworks==5.0.3
+plotly
+python-dotenv
+shap
