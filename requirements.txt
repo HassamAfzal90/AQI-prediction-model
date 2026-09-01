@@ -1,6 +1,7 @@
-numpy==1.26.4
+numpy==1.25.3
 pandas==2.1.4
 scikit-learn==1.5.2
 joblib==1.4.2
 requests==2.32.3
 hopsworks==5.0.6
+plotly==5.18.0
