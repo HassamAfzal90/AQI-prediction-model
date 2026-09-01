@@ -301,14 +301,45 @@ def safe_joblib_load(path):
     except ValueError as e:
         msg = str(e)
         if 'is not a known BitGenerator' in msg or 'MT19937' in msg:
-            # Try to repair numpy internals and retry once
+            # 1) Try to repair numpy internals and retry
             ensure_numpy_bitgenerator_compat()
             try:
                 return joblib.load(path)
             except Exception:
-                # Re-raise original for clearer trace
-                raise
-        # not the BitGenerator error - re-raise
+                pass
+
+            # 2) If that fails, try monkeypatching numpy.random._pickle.__bit_generator_ctor
+            try:
+                import importlib
+                np_pickle = importlib.import_module('numpy.random._pickle')
+                mt_mod = importlib.import_module('numpy.random._mt19937')
+                MT = getattr(mt_mod, 'MT19937', None)
+
+                original_ctor = getattr(np_pickle, '__bit_generator_ctor', None)
+
+                def _patched_ctor(bit_generator_name, *args, **kwargs):
+                    # If bit_generator_name is a class object named MT19937, map to the known MT class
+                    try:
+                        return original_ctor(bit_generator_name, *args, **kwargs)
+                    except Exception:
+                        try:
+                            if getattr(bit_generator_name, '__name__', '') == 'MT19937' and MT is not None:
+                                return MT
+                        except Exception:
+                            pass
+                        raise
+
+                if original_ctor is not None:
+                    np_pickle.__bit_generator_ctor = _patched_ctor
+                    try:
+                        return joblib.load(path)
+                    finally:
+                        # restore original to avoid side-effects
+                        np_pickle.__bit_generator_ctor = original_ctor
+            except Exception:
+                pass
+
+        # re-raise original error if none of the recovery attempts worked
         raise
 
 
