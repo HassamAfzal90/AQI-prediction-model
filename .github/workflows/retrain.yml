@@ -48,15 +48,17 @@ jobs:
 
       - name: Verify dependencies (show installed versions)
         run: |
-          python -c "import importlib; mods=['hopsworks','hsml','hsfs','joblib','numpy','pandas','requests','sklearn'];
-print('Dependencies loaded successfully');
+          python - <<'PY'
+import importlib
+mods = ['hopsworks','hsml','hsfs','joblib','numpy','pandas','requests','sklearn']
+print('Dependencies loaded successfully')
 for m in mods:
     try:
-        mod=importlib.import_module(m)
-        print(m+':', getattr(mod,'__version__',None))
+        mod = importlib.import_module(m)
+        print(m + ':', getattr(mod, '__version__', None))
     except Exception as e:
-        print(m+': import failed ->', e)
-"
+        print(m + ': import failed ->', e)
+PY
           python -m pip show hopsworks hsml hsfs || true
 
       - name: Run retraining script
