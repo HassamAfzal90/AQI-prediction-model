@@ -23,9 +23,8 @@ The app is meant for monitoring pollution risk, highlighting vulnerable periods,
 
 Live deployment link:
 
-- Streamlit app: https://your-app-name.streamlit.app
+- Streamlit app: [https://your-app-name.streamlit.app](https://aqi-prediction-model-irbmq239pwxeqmbz6emxuv.streamlit.app/)
 
-> Replace the placeholder with the actual deployed URL from Streamlit Community Cloud once the app is published.
 
 ## Dashboard Preview
 
@@ -384,49 +383,3 @@ This combination makes the project useful not only as a forecast model, but also
 This project demonstrates a full workflow for short-term air quality forecasting in a local context using real-world public data. It combines forecasting, explainability, operational deployment, and model versioning in a single end-to-end solution.
 
 The core model set is built around Gradient Boosting Regressors, and the project is structured to support local experimentation, retraining, deployment, and model registry tracking.
-
----
-
-## Useful next steps
-
-- add a direct link to the final deployed Streamlit app in this README
-- add a screenshot of the SHAP panel itself
-- add a release/version badge
-- add a changelog section for retraining updates
-- pin exact dependency versions to reduce Hopsworks trigger failures
-
-- the API key is valid
-- the Hopsworks project is correct
-- the model versions exist in the registry
-- the model artifact includes `features.pkl` and a valid model object
-
-### Open-Meteo requests fail
-
-Verify internet access and confirm the API is responding properly. Some fallback values are used for the live cards, but forecast execution will fail if the required historical or model data is unavailable.
-
-## Validation Commands
-
-```bash
-python -m py_compile app.py retrain.py
-python -m pip check
-python -c "import hopsworks, joblib, numpy, pandas, requests, sklearn; print('Dependencies loaded successfully')"
-```
-
-## Security Notes
-
-- Do not commit `.env` files or secret credentials
-- Do not upload API keys to GitHub in plain text
-- Use GitHub secrets or Streamlit secrets for deployment
-- Rotate exposed keys immediately if they are accidentally shared
-
-## License
-
-This project is intended for educational and research use. Please use it responsibly and ensure that any external API or cloud credentials remain secure.
-
-## Project Status
-
-This repository is actively used for AQI forecasting, Hopsworks model registry integration, and Streamlit-based visualization.
-
-## Contact
-
-For questions or collaboration inquiries, please reach out through the repository issues or the project maintainer profile on GitHub.
