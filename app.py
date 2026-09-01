@@ -759,6 +759,94 @@ def load_all_models(key):
 
 models = None
 # Defer loading models until a user action to avoid startup crashes during unpickle errors.
+import tempfile
+import zipfile
+import tarfile
+import shutil
+
+MODEL_ARTIFACTS_INFO = [
+    ("sargodha_aqi_gbr_day1", 4, "Day 1"),
+    ("sargodha_aqi_gbr_day2", 3, "Day 2"),
+    ("sargodha_aqi_gbr_day3", 3, "Day 3"),
+]
+
+
+def _download_and_extract(url, dest_dir):
+    """Download a single artifact and extract into dest_dir. Returns path to extracted folder or raises."""
+    r = requests.get(url, stream=True, timeout=60)
+    r.raise_for_status()
+    fname = url.split("/")[-1]
+    local_path = os.path.join(dest_dir, fname)
+    with open(local_path, "wb") as fh:
+        for chunk in r.iter_content(chunk_size=8192):
+            if chunk:
+                fh.write(chunk)
+    # Try to extract
+    try:
+        if zipfile.is_zipfile(local_path):
+            with zipfile.ZipFile(local_path, "r") as z:
+                z.extractall(dest_dir)
+            return dest_dir
+        elif tarfile.is_tarfile(local_path):
+            with tarfile.open(local_path, "r:*") as t:
+                t.extractall(dest_dir)
+            return dest_dir
+        else:
+            # Not an archive; if it's a single joblib/pkl, create a folder and move
+            single_dir = os.path.join(dest_dir, os.path.splitext(fname)[0])
+            os.makedirs(single_dir, exist_ok=True)
+            shutil.move(local_path, os.path.join(single_dir, fname))
+            return single_dir
+    finally:
+        # keep local_path for debugging if needed
+        pass
+
+
+def _load_models_from_dir(model_dir_root):
+    models_dict = {}
+    for m_name, m_ver, label in MODEL_ARTIFACTS_INFO:
+        # Look for a folder named after the model, or scan for files
+        model_obj = None
+        feature_names = None
+        # First check a subfolder
+        candidate_dirs = [
+            os.path.join(model_dir_root, m_name),
+            model_dir_root,
+        ]
+        for search_dir in candidate_dirs:
+            if not os.path.isdir(search_dir):
+                continue
+            for root, dirs, files in os.walk(search_dir):
+                for file in files:
+                    file_path = os.path.join(root, file)
+                    if file == "features.pkl":
+                        try:
+                            feature_names = joblib.load(file_path)
+                        except Exception:
+                            pass
+                    elif file.endswith(".pkl") or file.endswith(".joblib"):
+                        if file == "features.pkl":
+                            continue
+                        try:
+                            raw_obj = safe_joblib_load(file_path)
+                            extracted = extract_model(raw_obj)
+                            if extracted is not None:
+                                model_obj = extracted
+                        except Exception:
+                            # ignore and continue to try other files
+                            pass
+                if model_obj is not None and feature_names is not None:
+                    break
+            if model_obj is not None and feature_names is not None:
+                break
+
+        if model_obj is None or feature_names is None:
+            raise ValueError(f"Could not find usable model and features for {m_name} in {model_dir_root}")
+
+        models_dict[label] = {"model": model_obj, "features": feature_names}
+    return models_dict
+
+
 if api_key:
     st.sidebar.markdown("### 🔁 Model Loading")
     if not HOPSWORKS_AVAILABLE:
@@ -767,9 +855,42 @@ if api_key:
         )
         st.sidebar.markdown(
             "If you need model loading in this Cloud deployment, either install `hopsworks` in the environment (not recommended on Streamlit Cloud), "
-            "or use the retrain workflow to upload artifacts to a registry accessible at build time."
+            "or provide model artifacts via a public URL so the app can download them without the hopsworks client."
         )
-        # Offer an on-demand installer when the user explicitly requests it. This may take time and can fail due to dependency conflicts.
+
+        # New: allow users to provide a base URL for model artifacts (or exact per-model URLs)
+        st.sidebar.markdown("#### Alternative: Download model artifacts from URL")
+        artifacts_base = st.sidebar.text_input(
+            "Model artifacts base URL (use {model} in the path; e.g. https://example.com/artifacts/{model}.zip)",
+            value="",
+            placeholder="https://raw.githubusercontent.com/<user>/<repo>/main/artifacts/{model}.zip",
+            key="artifacts_base_url",
+        )
+        if artifacts_base:
+            st.sidebar.caption("You can use the token {model} in the URL; it will be replaced with each model name.")
+            if st.sidebar.button("Download models from URL"):
+                with st.sidebar.spinner("Downloading model artifacts..."):
+                    tmp = tempfile.mkdtemp(prefix="models_")
+                    try:
+                        # For each model, format URL and attempt download/extract
+                        for m_name, m_ver, label in MODEL_ARTIFACTS_INFO:
+                            attempt_url = artifacts_base.replace("{model}", m_name)
+                            try:
+                                _download_and_extract(attempt_url, tmp)
+                            except Exception as e:
+                                st.sidebar.error(f"Failed to download/extract for {m_name}: {e}")
+                                raise
+                        # Now try to load models from the tmp dir
+                        models = _load_models_from_dir(tmp)
+                        st.sidebar.success("✅ Models downloaded and loaded from provided URLs.")
+                    except Exception as e:
+                        st.sidebar.error(f"Model download/load failed: {e}")
+                        models = None
+                    finally:
+                        # keep tmp for debugging; do not remove automatically
+                        st.sidebar.info(f"Downloaded artifacts stored at: {tmp}")
+
+        # Offer an on-demand installer when the user explicitly requests it. This may take time and can fail due to permission or dependency conflicts.
         if st.sidebar.button("Install hopsworks now (attempt runtime pip install)"):
             with st.sidebar.spinner("Installing hopsworks (this may take a minute)..."):
                 import subprocess, sys
