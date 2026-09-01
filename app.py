@@ -253,26 +253,64 @@ ensure_sklearn_loss_compat()
 
 # Compatibility shim for numpy BitGenerator changes across numpy versions (MT19937 registry)
 def ensure_numpy_bitgenerator_compat():
-    """If numpy's internal BitGenerator registry doesn't include MT19937 (used by some pickles),
-    attempt to register the implementation so old pickles can be unpickled.
-    This is best-effort and fails silently if internals are not present.
+    """Best-effort: try multiple known numpy internals locations and registries
+    to register MT19937 so older pickles referencing numpy.random._mt19937.MT19937
+    can be unpickled. This mutates internals if possible; it is safe to call
+    repeatedly and fails silently on platforms where internals differ.
     """
     try:
         import importlib
         mt = importlib.import_module('numpy.random._mt19937')
-        bg = importlib.import_module('numpy.random._bit_generator')
-        # Register MT19937 in the internal registry so old pickles can be unpickled
-        if hasattr(bg, '_bit_generator_registry') and 'MT19937' not in bg._bit_generator_registry:
-            bg._bit_generator_registry['MT19937'] = mt.MT19937
-    except Exception:
+        candidates = [
+            'numpy.random._bit_generator',
+            'numpy.random._pickle',
+            'numpy.random._generator',
+            'numpy.random',
+        ]
+        attr_names = ['_bit_generator_registry', 'bit_generator_registry', '_bit_gen_registry', 'BIT_GENERATOR_REGISTRY']
+        for mod_name in candidates:
+            try:
+                mod = importlib.import_module(mod_name)
+            except Exception:
+                continue
+            for attr in attr_names:
+                if hasattr(mod, attr):
+                    reg = getattr(mod, attr)
+                    try:
+                        if isinstance(reg, dict) and 'MT19937' not in reg:
+                            reg['MT19937'] = mt.MT19937
+                    except Exception:
+                        pass
+        # Also try to expose MT19937 in numpy.random namespace if present
         try:
-            # Some numpy builds expose MT19937 directly; nothing to do in that case
-            from numpy.random import MT19937 as _mt_class  # noqa: F401
+            nr = importlib.import_module('numpy.random')
+            if not hasattr(nr, 'MT19937'):
+                setattr(nr, 'MT19937', mt.MT19937)
         except Exception:
-            # Give up silently; unpickling may still fail and will be reported to the UI
             pass
+    except Exception:
+        # Nothing we can do; callers will handle unpickle failure
+        pass
 
 ensure_numpy_bitgenerator_compat()
+
+# Safe joblib loader that retries after attempting to register MT19937
+def safe_joblib_load(path):
+    try:
+        return joblib.load(path)
+    except ValueError as e:
+        msg = str(e)
+        if 'is not a known BitGenerator' in msg or 'MT19937' in msg:
+            # Try to repair numpy internals and retry once
+            ensure_numpy_bitgenerator_compat()
+            try:
+                return joblib.load(path)
+            except Exception:
+                # Re-raise original for clearer trace
+                raise
+        # not the BitGenerator error - re-raise
+        raise
+
 
 # ============================================================
 # AQI CATEGORY HELPERS (US AQI breakpoints)
@@ -664,7 +702,7 @@ def load_all_models(key):
                 elif file.endswith(".pkl") or file.endswith(".joblib"):
                     if file == "features.pkl":
                         continue
-                    raw_obj = joblib.load(file_path)
+                    raw_obj = safe_joblib_load(file_path)
                     extracted = extract_model(raw_obj)
                     if extracted is not None:
                         model_obj = extracted
