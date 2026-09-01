@@ -251,6 +251,29 @@ def ensure_sklearn_loss_compat():
 
 ensure_sklearn_loss_compat()
 
+# Compatibility shim for numpy BitGenerator changes across numpy versions (MT19937 registry)
+def ensure_numpy_bitgenerator_compat():
+    """If numpy's internal BitGenerator registry doesn't include MT19937 (used by some pickles),
+    attempt to register the implementation so old pickles can be unpickled.
+    This is best-effort and fails silently if internals are not present.
+    """
+    try:
+        import importlib
+        mt = importlib.import_module('numpy.random._mt19937')
+        bg = importlib.import_module('numpy.random._bit_generator')
+        # Register MT19937 in the internal registry so old pickles can be unpickled
+        if hasattr(bg, '_bit_generator_registry') and 'MT19937' not in bg._bit_generator_registry:
+            bg._bit_generator_registry['MT19937'] = mt.MT19937
+    except Exception:
+        try:
+            # Some numpy builds expose MT19937 directly; nothing to do in that case
+            from numpy.random import MT19937 as _mt_class  # noqa: F401
+        except Exception:
+            # Give up silently; unpickling may still fail and will be reported to the UI
+            pass
+
+ensure_numpy_bitgenerator_compat()
+
 # ============================================================
 # AQI CATEGORY HELPERS (US AQI breakpoints)
 # ============================================================
