@@ -75,13 +75,18 @@ PY
           path: retrain_artifacts/**
 
   notify:
-    if: ${{ always() && secrets.GMAIL_USERNAME != '' && secrets.GMAIL_APP_PASSWORD != '' }}
     needs: retrain
     runs-on: ubuntu-latest
     env:
       GMAIL_USERNAME: ${{ secrets.GMAIL_USERNAME }}
       GMAIL_APP_PASSWORD: ${{ secrets.GMAIL_APP_PASSWORD }}
     steps:
+      - name: Check Gmail secrets and skip if missing
+        run: |
+          if [ -z "${GMAIL_USERNAME}" ] || [ -z "${GMAIL_APP_PASSWORD}" ]; then
+            echo "Gmail secrets not set; skipping notification job."
+            exit 0
+          fi
       - name: Send Gmail notification
         uses: dawidd6/action-send-mail@v3
         with:
@@ -97,4 +102,4 @@ PY
             The AQI model retraining workflow finished with status: ${{ needs.retrain.result }}.
             Repository: ${{ github.repository }}
             Commit: ${{ github.sha }}
-            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+            Workflow run: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}"
