@@ -2,7 +2,12 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-import hopsworks
+try:
+    import hopsworks
+    HOPSWORKS_AVAILABLE = True
+except Exception:
+    hopsworks = None
+    HOPSWORKS_AVAILABLE = False
 import os
 import re
 import sys
@@ -756,20 +761,29 @@ models = None
 # Defer loading models until a user action to avoid startup crashes during unpickle errors.
 if api_key:
     st.sidebar.markdown("### 🔁 Model Loading")
-    if st.sidebar.button("Load models from Hopsworks"):
-        with st.sidebar.spinner("Loading models from Hopsworks..."):
-            try:
-                models = load_all_models(api_key)
-                st.sidebar.success("✅ Day 1, 2, 3 Models Ready!")
-            except Exception as e:
-                # Don't show full traceback to avoid long crashes in the UI; log concise message and continue.
-                st.sidebar.error("Failed to load models from Hopsworks. The app will run in offline mode.")
-                st.sidebar.text(str(e))
-                models = None
+    if not HOPSWORKS_AVAILABLE:
+        st.sidebar.warning(
+            "Hopsworks client not installed in this environment. Models cannot be loaded from Hopsworks here."
+        )
+        st.sidebar.markdown(
+            "If you need model loading in this Cloud deployment, either install `hopsworks` in the environment (not recommended on Streamlit Cloud), "
+            "or use the retrain workflow to upload artifacts to a registry accessible at build time."
+        )
     else:
-        st.sidebar.info("Models are not loaded. Click 'Load models from Hopsworks' to attempt loading.")
+        if st.sidebar.button("Load models from Hopsworks"):
+            with st.sidebar.spinner("Loading models from Hopsworks..."):
+                try:
+                    models = load_all_models(api_key)
+                    st.sidebar.success("✅ Day 1, 2, 3 Models Ready!")
+                except Exception as e:
+                    # Don't show full traceback to avoid long crashes in the UI; log concise message and continue.
+                    st.sidebar.error("Failed to load models from Hopsworks. The app will run in offline mode.")
+                    st.sidebar.text(str(e))
+                    models = None
+        else:
+            st.sidebar.info("Models are not loaded. Click 'Load models from Hopsworks' to attempt loading.")
 else:
-    st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in .env, Streamlit secrets, or paste it in the sidebar to enable model loading.")
+    st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in .env, Streamlit secrets, or paste it here.")
 
 # --- 3. LIVE DATA UI ---
 st.markdown("### 📡 Live Weather & Air Quality — Sargodha")
