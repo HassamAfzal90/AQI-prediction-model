@@ -265,7 +265,11 @@ def save_model_version(model_meta, artifacts_dir: pathlib.Path):
     return model_meta.save(str(artifacts_dir))
 
 
-def train_and_upload_models(daily_v2: pd.DataFrame, mr):
+def train_and_upload_models(daily_v2: pd.DataFrame, mr=None):
+    """
+    Train models locally. If mr (model registry) is provided, attempt to upload improved models.
+    If mr is None, models will be trained and saved to artifacts locally but not registered.
+    """
     split_idx = int(len(daily_v2) * 0.80)
     train = daily_v2.iloc[:split_idx]
     test = daily_v2.iloc[split_idx:]
@@ -324,25 +328,36 @@ def train_and_upload_models(daily_v2: pd.DataFrame, mr):
 
         print(f"Horizon day{h} metrics: {metrics}")
 
-        versions = mr.get_models(model_name)
-        current_metrics, current_version = choose_best_metrics(versions)
-        print(f"Best existing metrics for {model_name} v{current_version}: {current_metrics}")
+        if mr is not None:
+            versions = mr.get_models(model_name)
+            current_metrics, current_version = choose_best_metrics(versions)
+            print(f"Best existing metrics for {model_name} v{current_version}: {current_metrics}")
 
-        if improved(metrics, current_metrics):
+            if improved(metrics, current_metrics):
+                timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
+                artifacts_dir = MODEL_ARTIFACT_ROOT / f"{model_name}_{timestamp}"
+                artifacts_dir.mkdir(parents=True, exist_ok=True)
+
+                joblib.dump(model, artifacts_dir / "model.pkl")
+                joblib.dump(feat_cols, artifacts_dir / "features.pkl")
+
+                example_input = X_test.iloc[[0]]
+                model_obj = create_model_metadata(mr, model_name, metrics, example_input)
+                saved_meta = save_model_version(model_obj, artifacts_dir)
+                print(f"Saved improved model for {model_name} as registry version {saved_meta.version}.")
+                success_count += 1
+            else:
+                print(f"Skipping upload for {model_name}; no improvement over current metrics.")
+        else:
+            # No model registry available (e.g., hopsworks login failed or intentionally skipped).
+            # Save trained artifacts locally so they can be inspected or uploaded later.
             timestamp = datetime.utcnow().strftime("%Y%m%d_%H%M%S")
             artifacts_dir = MODEL_ARTIFACT_ROOT / f"{model_name}_{timestamp}"
             artifacts_dir.mkdir(parents=True, exist_ok=True)
 
             joblib.dump(model, artifacts_dir / "model.pkl")
             joblib.dump(feat_cols, artifacts_dir / "features.pkl")
-
-            example_input = X_test.iloc[[0]]
-            model_obj = create_model_metadata(mr, model_name, metrics, example_input)
-            saved_meta = save_model_version(model_obj, artifacts_dir)
-            print(f"Saved improved model for {model_name} as registry version {saved_meta.version}.")
-            success_count += 1
-        else:
-            print(f"Skipping upload for {model_name}; no improvement over current metrics.")
+            print(f"Trained model for {model_name} saved locally at {artifacts_dir} (registry not available).")
 
     return success_count
 
@@ -352,15 +367,18 @@ def run_retrain():
     if not api_key:
         raise RuntimeError("HOPSWORKS_API_KEY is required in the environment.")
 
+    project = None
+    mr = None
     try:
         project = hopsworks.login(
             host="eu-west.cloud.hopsworks.ai",
             api_key_value=api_key,
             project="colab",
         )
+        mr = project.get_model_registry()
     except Exception as e:
         # Provide clearer debug output for hopsworks login failures seen in CI
-        print("Failed to login to Hopsworks:", repr(e))
+        print("Failed to login to Hopsworks (continuing without registry):", repr(e))
         resp = getattr(e, "response", None)
         try:
             if resp is not None:
@@ -373,10 +391,7 @@ def run_retrain():
                     print("Response repr:", repr(resp))
         except Exception as ex2:
             print("Error while printing response details:", repr(ex2))
-        # Re-raise to keep behavior the same but with additional logs
-        raise
-
-    mr = project.get_model_registry()
+        # Continue without registry (models will be saved locally)
 
     raw_df = load_raw_data()
     daily_v2 = build_feature_dataframe(raw_df)
