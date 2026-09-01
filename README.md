@@ -106,8 +106,7 @@ AQI forecast + alerts + interpretability + charts
 ├── sargodha_features_daily_v2.csv # Daily feature-engineered dataset
 ├── retrain_artifacts/             # Generated trained model artifacts
 └── .github/
-    └── workflows/
-        └── retrain.yml            # Automated retraining workflow
+  
 ```
 
 ---
@@ -115,7 +114,7 @@ AQI forecast + alerts + interpretability + charts
 ## Technology stack
 
 ### Core
-- Python 3.10+
+- Python 3.12+
 - Streamlit
 - Pandas
 - NumPy
