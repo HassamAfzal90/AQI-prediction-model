@@ -51,7 +51,7 @@ jobs:
           python retrain.py
 
   notify:
-    if: ${{ always() && env.GMAIL_USERNAME != '' && env.GMAIL_APP_PASSWORD != '' }}
+    if: ${{ always() && secrets.GMAIL_USERNAME != '' && secrets.GMAIL_APP_PASSWORD != '' }}
     needs: retrain
     runs-on: ubuntu-latest
     env:
