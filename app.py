@@ -15,7 +15,12 @@ except Exception:
     shap = None
     SHAP_AVAILABLE = False
 # Redeploy trigger: update to force Streamlit Cloud rebuild
-import plotly.graph_objects as go
+try:
+    import plotly.graph_objects as go
+    PLOTLY_AVAILABLE = True
+except Exception:
+    go = None
+    PLOTLY_AVAILABLE = False
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
@@ -266,6 +271,8 @@ def get_aqi_category(aqi):
 
 
 def aqi_gauge_chart(value, title):
+    if not PLOTLY_AVAILABLE:
+        return None
     label, color, emoji, _ = get_aqi_category(value)
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -324,6 +331,8 @@ def compute_shap_for_day(model, feature_names, x_vec):
 
 
 def shap_bar_chart(contrib_df, title, top_n=10):
+    if not PLOTLY_AVAILABLE:
+        return None
     plot_df = contrib_df.head(top_n).sort_values("shap_value")
     colors = ["#e74c3c" if v > 0 else "#2ecc71" for v in plot_df["shap_value"]]
 
@@ -776,7 +785,12 @@ if run_forecast:
             gcols = st.columns(3)
             for i, col in enumerate(gcols):
                 with col:
-                    st.plotly_chart(aqi_gauge_chart(preds[i], f"Day {i+1} — {date_labels[i]}"), use_container_width=True)
+                    fig = aqi_gauge_chart(preds[i], f"Day {i+1} — {date_labels[i]}")
+                    if PLOTLY_AVAILABLE and fig is not None:
+                        st.plotly_chart(fig, use_container_width=True)
+                    else:
+                        label, color, emoji, _ = get_aqi_category(preds[i])
+                        st.markdown(f"**Day {i+1} — {date_labels[i]}:** {preds[i]:.0f} — {emoji} {label}")
 
             # ---------------- TREND CHART: HISTORY + FORECAST ----------------
             st.markdown("### 📈 AQI Trend — Last 14 Days + 3-Day Model Forecast")
@@ -785,48 +799,54 @@ if run_forecast:
             hist_dates = list(hist_tail.index.date)
             hist_values = list(hist_tail["AQI"].values)
 
-            trend_fig = go.Figure()
-
-            # Historical actual AQI
-            trend_fig.add_trace(go.Scatter(
-                x=hist_dates,
-                y=hist_values,
-                mode="lines+markers",
-                name="Historical AQI",
-                line=dict(color="#5dade2", width=3),
-                marker=dict(size=6),
-            ))
-
-            # Bridge point connecting history to forecast
             bridge_x = [hist_dates[-1]] + [d.date() for d in dates]
             bridge_y = [hist_values[-1]] + preds
 
-            trend_fig.add_trace(go.Scatter(
-                x=bridge_x,
-                y=bridge_y,
-                mode="lines+markers",
-                name="Model Forecast",
-                line=dict(color="#f39c12", width=3, dash="dash"),
-                marker=dict(size=10, symbol="diamond"),
-            ))
+            if PLOTLY_AVAILABLE:
+                trend_fig = go.Figure()
 
-            # Hazard threshold reference lines
-            for level, color, name in [(100, "#f1c40f", "Moderate"), (150, "#e67e22", "Unhealthy (Sensitive)"),
-                                        (200, "#e74c3c", "Unhealthy"), (300, "#8e44ad", "Very Unhealthy")]:
-                trend_fig.add_hline(y=level, line_dash="dot", line_color=color, opacity=0.5,
-                                     annotation_text=name, annotation_font_color=color, annotation_font_size=10)
+                # Historical actual AQI
+                trend_fig.add_trace(go.Scatter(
+                    x=hist_dates,
+                    y=hist_values,
+                    mode="lines+markers",
+                    name="Historical AQI",
+                    line=dict(color="#5dade2", width=3),
+                    marker=dict(size=6),
+                ))
 
-            trend_fig.update_layout(
-                paper_bgcolor="rgba(0,0,0,0)",
-                plot_bgcolor="rgba(255,255,255,0.02)",
-                font=dict(color="#dfe9f3"),
-                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                margin=dict(l=10, r=10, t=40, b=10),
-                xaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="Date"),
-                yaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="AQI"),
-                height=420,
-            )
-            st.plotly_chart(trend_fig, use_container_width=True)
+                trend_fig.add_trace(go.Scatter(
+                    x=bridge_x,
+                    y=bridge_y,
+                    mode="lines+markers",
+                    name="Model Forecast",
+                    line=dict(color="#f39c12", width=3, dash="dash"),
+                    marker=dict(size=10, symbol="diamond"),
+                ))
+
+                # Hazard threshold reference lines
+                for level, color, name in [(100, "#f1c40f", "Moderate"), (150, "#e67e22", "Unhealthy (Sensitive)"),
+                                            (200, "#e74c3c", "Unhealthy"), (300, "#8e44ad", "Very Unhealthy")]:
+                    trend_fig.add_hline(y=level, line_dash="dot", line_color=color, opacity=0.5,
+                                         annotation_text=name, annotation_font_color=color, annotation_font_size=10)
+
+                trend_fig.update_layout(
+                    paper_bgcolor="rgba(0,0,0,0)",
+                    plot_bgcolor="rgba(255,255,255,0.02)",
+                    font=dict(color="#dfe9f3"),
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                    margin=dict(l=10, r=10, t=40, b=10),
+                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="Date"),
+                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="AQI"),
+                    height=420,
+                )
+                st.plotly_chart(trend_fig, use_container_width=True)
+            else:
+                # Fallback: show a simple line chart with Streamlit if plotly isn't available
+                bridge_df = pd.DataFrame({"Date": bridge_x, "AQI": bridge_y})
+                bridge_df["Date"] = pd.to_datetime(bridge_df["Date"]).dt.date
+                bridge_df = bridge_df.set_index("Date")
+                st.line_chart(bridge_df["AQI"])
 
             # ---------------- RAW TABLE ----------------
             with st.expander("📋 View Raw Forecast Table"):
@@ -874,10 +894,12 @@ if "last_preds" in st.session_state and models:
                 contrib_df, base_value = compute_shap_for_day(model, feature_names, x_vec)
 
             top_n = min(10, len(contrib_df))
-            st.plotly_chart(
-                shap_bar_chart(contrib_df, f"Top {top_n} Feature Contributions — {day_choice} ({date_label})", top_n=top_n),
-                use_container_width=True,
-            )
+            shap_fig = shap_bar_chart(contrib_df, f"Top {top_n} Feature Contributions — {day_choice} ({date_label})", top_n=top_n)
+            if PLOTLY_AVAILABLE and shap_fig is not None:
+                st.plotly_chart(shap_fig, use_container_width=True)
+            else:
+                # Fallback: show table of top contributions
+                st.write(contrib_df.head(top_n)[["feature","shap_value"]].rename(columns={"feature":"Feature","shap_value":"SHAP Contribution"}).reset_index(drop=True))
 
             c1, c2, c3 = st.columns(3)
             with c1:
