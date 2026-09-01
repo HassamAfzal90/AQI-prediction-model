@@ -769,6 +769,28 @@ if api_key:
             "If you need model loading in this Cloud deployment, either install `hopsworks` in the environment (not recommended on Streamlit Cloud), "
             "or use the retrain workflow to upload artifacts to a registry accessible at build time."
         )
+        # Offer an on-demand installer when the user explicitly requests it. This may take time and can fail due to dependency conflicts.
+        if st.sidebar.button("Install hopsworks now (attempt runtime pip install)"):
+            with st.sidebar.spinner("Installing hopsworks (this may take a minute)..."):
+                import subprocess, sys
+                try:
+                    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "hopsworks==5.0.*"]
+                    proc = subprocess.run(cmd, capture_output=True, text=True)
+                    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
+                    if proc.returncode == 0:
+                        try:
+                            import importlib
+                            hopsworks = importlib.import_module("hopsworks")
+                            HOPSWORKS_AVAILABLE = True
+                            st.sidebar.success("hopsworks installed and imported successfully. You can now click 'Load models from Hopsworks'.")
+                        except Exception as e:
+                            st.sidebar.error(f"Installed but import failed: {e}")
+                            st.sidebar.text(out)
+                    else:
+                        st.sidebar.error("Installation failed; see details below.")
+                        st.sidebar.text(out)
+                except Exception as e:
+                    st.sidebar.error(f"Installation attempt raised an exception: {e}")
     else:
         if st.sidebar.button("Load models from Hopsworks"):
             with st.sidebar.spinner("Loading models from Hopsworks..."):
