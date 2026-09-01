@@ -3,7 +3,7 @@ pandas==2.1.4
 scikit-learn==1.5.2
 joblib==1.4.2
 requests==2.32.3
-hopsworks==5.0.6
+# hopsworks moved to requirements-workflow.txt (CI-only) to avoid protobuf conflict with Streamlit
 plotly==5.18.0
 streamlit==1.62.0
 setuptools>=67.0.0
