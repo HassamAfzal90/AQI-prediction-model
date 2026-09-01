@@ -28,11 +28,10 @@ Live deployment link:
 
 ## Dashboard Preview
 
-![Dashboard overview](docs<img width="1600" height="900" alt="dashboard-preview" src="https://github.com/user-attachments/assets/1abfff0d-85ae-4635-b2b8-fa1dd39410d5" /><img width="1600" height="900" alt="dashboard-preview" src="https://github.com/user-attachments/assets/3b6b8a26-1570-4ada-bb2d-abaab27c669d" />
-dashboard-preview.png)
 
-![AQI trend forecast](docs/trend-forecast.png)
+<img width="1600" height="900" alt="dashboard-preview" src="https://github.com/user-attachments/assets/1abfff0d-85ae-4635-b2b8-fa1dd39410d5" />
 
+<img width="1600" height="900" alt="trend-forecast" src="https://github.com/user-attachments/assets/0225cbbd-d362-4238-a1d3-18a81d81d780" />
 ---
 
 ## Why this project matters
