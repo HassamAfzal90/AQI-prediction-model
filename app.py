@@ -2,30 +2,13 @@ import streamlit as st
 import pandas as pd
 import numpy as np
 import joblib
-try:
-    import hopsworks
-    HOPSWORKS_AVAILABLE = True
-except Exception:
-    hopsworks = None
-    HOPSWORKS_AVAILABLE = False
+import hopsworks
 import os
 import re
 import sys
 import types
 import requests
-try:
-    import shap
-    SHAP_AVAILABLE = True
-except Exception:
-    shap = None
-    SHAP_AVAILABLE = False
-# Redeploy trigger: update to force Streamlit Cloud rebuild
-try:
-    import plotly.graph_objects as go
-    PLOTLY_AVAILABLE = True
-except Exception:
-    go = None
-    PLOTLY_AVAILABLE = False
+import plotly.graph_objects as go
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
 from datetime import datetime, timedelta
@@ -241,7 +224,7 @@ def create_requests_session(retries=3, backoff_factor=1.0):
     session.mount("http://", adapter)
     return session
 
-# Compatibility shim for old scikit-learn pickles that reference the legacy `_loss` module.
+# Compatibility shims for older pickled artifacts built against older NumPy/scikit-learn versions.
 def ensure_sklearn_loss_compat():
     try:
         import sklearn._loss._loss as sklearn_loss
@@ -254,99 +237,70 @@ def ensure_sklearn_loss_compat():
     except Exception:
         pass
 
-ensure_sklearn_loss_compat()
 
-# Compatibility shim for numpy BitGenerator changes across numpy versions (MT19937 registry)
 def ensure_numpy_bitgenerator_compat():
-    """Best-effort: try multiple known numpy internals locations and registries
-    to register MT19937 so older pickles referencing numpy.random._mt19937.MT19937
-    can be unpickled. This mutates internals if possible; it is safe to call
-    repeatedly and fails silently on platforms where internals differ.
-    """
     try:
-        import importlib
-        mt = importlib.import_module('numpy.random._mt19937')
-        candidates = [
-            'numpy.random._bit_generator',
-            'numpy.random._pickle',
-            'numpy.random._generator',
-            'numpy.random',
+        import numpy as np
+        import numpy.random as npr
+        import numpy.random._pickle as np_pickle
+
+        # Older sklearn/joblib pickles often reference legacy internal NumPy module names
+        # such as numpy._core.* or serialize a BitGenerator class object directly.
+        if not hasattr(np, "_core"):
+            np._core = np.core
+        core = np.core
+        legacy_names = [
+            "numeric", "_multiarray_umath", "multiarray", "_dtype", "_internal",
+            "_methods", "umath", "_exceptions", "_add_newdocs_ufunc", "_multiarray_tests",
         ]
-        attr_names = ['_bit_generator_registry', 'bit_generator_registry', '_bit_gen_registry', 'BIT_GENERATOR_REGISTRY']
-        for mod_name in candidates:
-            try:
-                mod = importlib.import_module(mod_name)
-            except Exception:
-                continue
-            for attr in attr_names:
-                if hasattr(mod, attr):
-                    reg = getattr(mod, attr)
-                    try:
-                        if isinstance(reg, dict) and 'MT19937' not in reg:
-                            reg['MT19937'] = mt.MT19937
-                    except Exception:
-                        pass
-        # Also try to expose MT19937 in numpy.random namespace if present
-        try:
-            nr = importlib.import_module('numpy.random')
-            if not hasattr(nr, 'MT19937'):
-                setattr(nr, 'MT19937', mt.MT19937)
-        except Exception:
-            pass
+        for name in legacy_names:
+            module = getattr(core, name, None)
+            if module is not None:
+                sys.modules.setdefault(f"numpy._core.{name}", module)
+        sys.modules.setdefault("numpy._core", core)
+
+        original_ctor = getattr(np_pickle, "__bit_generator_ctor", None)
+        if original_ctor is not None:
+            def _compat_bit_generator_ctor(bit_generator_name="MT19937", *args, **kwargs):
+                if isinstance(bit_generator_name, type):
+                    bit_generator_name = bit_generator_name.__name__
+                return original_ctor(bit_generator_name, *args, **kwargs)
+            np_pickle.__bit_generator_ctor = _compat_bit_generator_ctor
+
+        for mod_name, cls_name in [
+            ("_mt19937", "MT19937"),
+            ("_philox", "Philox"),
+            ("_pcg64", "PCG64"),
+            ("_sfc64", "SFC64"),
+        ]:
+            if mod_name not in sys.modules:
+                mod = types.ModuleType(mod_name)
+                if hasattr(npr, cls_name):
+                    setattr(mod, cls_name, getattr(npr, cls_name))
+                sys.modules[mod_name] = mod
+
+        if hasattr(np_pickle, "BitGenerators"):
+            for cls_name in ["MT19937", "Philox", "PCG64", "SFC64"]:
+                if cls_name not in np_pickle.BitGenerators and hasattr(npr, cls_name):
+                    np_pickle.BitGenerators[cls_name] = getattr(npr, cls_name)
     except Exception:
-        # Nothing we can do; callers will handle unpickle failure
         pass
 
-ensure_numpy_bitgenerator_compat()
 
-# Safe joblib loader that retries after attempting to register MT19937
-def safe_joblib_load(path):
+def load_pickle_compat(path):
+    """Load a joblib pickle, gracefully returning None for legacy NumPy artifacts that cannot be unpickled."""
     try:
         return joblib.load(path)
-    except ValueError as e:
-        msg = str(e)
-        if 'is not a known BitGenerator' in msg or 'MT19937' in msg:
-            # 1) Try to repair numpy internals and retry
+    except Exception:
+        try:
             ensure_numpy_bitgenerator_compat()
-            try:
-                return joblib.load(path)
-            except Exception:
-                pass
+            return joblib.load(path)
+        except Exception:
+            return None
 
-            # 2) If that fails, try monkeypatching numpy.random._pickle.__bit_generator_ctor
-            try:
-                import importlib
-                np_pickle = importlib.import_module('numpy.random._pickle')
-                mt_mod = importlib.import_module('numpy.random._mt19937')
-                MT = getattr(mt_mod, 'MT19937', None)
 
-                original_ctor = getattr(np_pickle, '__bit_generator_ctor', None)
-
-                def _patched_ctor(bit_generator_name, *args, **kwargs):
-                    # If bit_generator_name is a class object named MT19937, map to the known MT class
-                    try:
-                        return original_ctor(bit_generator_name, *args, **kwargs)
-                    except Exception:
-                        try:
-                            if getattr(bit_generator_name, '__name__', '') == 'MT19937' and MT is not None:
-                                return MT
-                        except Exception:
-                            pass
-                        raise
-
-                if original_ctor is not None:
-                    np_pickle.__bit_generator_ctor = _patched_ctor
-                    try:
-                        return joblib.load(path)
-                    finally:
-                        # restore original to avoid side-effects
-                        np_pickle.__bit_generator_ctor = original_ctor
-            except Exception:
-                pass
-
-        # re-raise original error if none of the recovery attempts worked
-        raise
-
+ensure_sklearn_loss_compat()
+ensure_numpy_bitgenerator_compat()
 
 # ============================================================
 # AQI CATEGORY HELPERS (US AQI breakpoints)
@@ -368,8 +322,6 @@ def get_aqi_category(aqi):
 
 
 def aqi_gauge_chart(value, title):
-    if not PLOTLY_AVAILABLE:
-        return None
     label, color, emoji, _ = get_aqi_category(value)
     fig = go.Figure(go.Indicator(
         mode="gauge+number",
@@ -397,59 +349,6 @@ def aqi_gauge_chart(value, title):
         font={'color': "#dfe9f3"},
         height=260,
         margin=dict(l=20, r=20, t=50, b=10),
-    )
-    return fig
-
-
-# ============================================================
-# SHAP EXPLAINABILITY HELPERS
-# ============================================================
-@st.cache_resource(show_spinner=False)
-def get_shap_explainer(_model):
-    """Build (and cache) a SHAP TreeExplainer for a given GradientBoosting model."""
-    return shap.TreeExplainer(_model)
-
-
-def compute_shap_for_day(model, feature_names, x_vec):
-    """Return a DataFrame of feature -> SHAP contribution for one prediction."""
-    explainer = get_shap_explainer(model)
-    shap_values = explainer.shap_values(x_vec)
-    base_value = explainer.expected_value
-    if isinstance(base_value, (list, np.ndarray)):
-        base_value = float(np.array(base_value).flatten()[0])
-
-    contrib = pd.DataFrame({
-        "feature": feature_names,
-        "shap_value": np.array(shap_values).flatten(),
-    })
-    contrib["abs_val"] = contrib["shap_value"].abs()
-    contrib = contrib.sort_values("abs_val", ascending=False)
-    return contrib, base_value
-
-
-def shap_bar_chart(contrib_df, title, top_n=10):
-    if not PLOTLY_AVAILABLE:
-        return None
-    plot_df = contrib_df.head(top_n).sort_values("shap_value")
-    colors = ["#e74c3c" if v > 0 else "#2ecc71" for v in plot_df["shap_value"]]
-
-    fig = go.Figure(go.Bar(
-        x=plot_df["shap_value"],
-        y=plot_df["feature"],
-        orientation="h",
-        marker=dict(color=colors),
-        text=[f"{v:+.2f}" for v in plot_df["shap_value"]],
-        textposition="outside",
-    ))
-    fig.update_layout(
-        title=dict(text=title, font=dict(size=15, color="#dfe9f3")),
-        paper_bgcolor="rgba(0,0,0,0)",
-        plot_bgcolor="rgba(255,255,255,0.02)",
-        font=dict(color="#dfe9f3"),
-        xaxis=dict(title="Impact on predicted AQI", gridcolor="rgba(255,255,255,0.06)", zerolinecolor="rgba(255,255,255,0.2)"),
-        yaxis=dict(gridcolor="rgba(255,255,255,0.06)"),
-        margin=dict(l=10, r=40, t=50, b=10),
-        height=380,
     )
     return fig
 
@@ -541,7 +440,7 @@ def fetch_historical_daily_data(lat, lon, lookback_days=45):
         "longitude": lon,
         "start_date": start_date.isoformat(),
         "end_date": end_date.isoformat(),
-        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+        "hourly": "temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m,precipitation",
         "timezone": "auto",
     }
     w_res = session.get(weather_url, params=weather_params, timeout=60)
@@ -552,7 +451,27 @@ def fetch_historical_daily_data(lat, lon, lookback_days=45):
 
     weather_df = pd.DataFrame(weather_json["hourly"])
     weather_df["time"] = pd.to_datetime(weather_df["time"])
-    weather_df = weather_df.set_index("time").resample("D").mean()
+    weather_df = weather_df.set_index("time")
+    weather_daily = weather_df.resample("D").agg({
+        "temperature_2m": ["mean", "max", "min"],
+        "relative_humidity_2m": "mean",
+        "pressure_msl": "mean",
+        "wind_speed_10m": "mean",
+        "precipitation": "sum",
+    })
+    weather_daily.columns = [
+        "_".join(col).strip("_") if isinstance(col, tuple) else col
+        for col in weather_daily.columns
+    ]
+    weather_daily = weather_daily.rename(columns={
+        "temperature_2m_mean": "temperature_2m_mean",
+        "temperature_2m_max": "temperature_2m_max",
+        "temperature_2m_min": "temperature_2m_min",
+        "relative_humidity_2m_mean": "relative_humidity_2m_mean",
+        "pressure_msl_mean": "pressure_msl_mean",
+        "wind_speed_10m_mean": "wind_speed_10m_mean",
+        "precipitation_sum": "precipitation_sum",
+    })
 
     aqi_url = "https://air-quality-api.open-meteo.com/v1/air-quality"
     aqi_params = {
@@ -571,11 +490,34 @@ def fetch_historical_daily_data(lat, lon, lookback_days=45):
 
     aqi_df = pd.DataFrame(aqi_json["hourly"])
     aqi_df["time"] = pd.to_datetime(aqi_df["time"])
-    aqi_df = aqi_df.set_index("time").resample("D").mean()
     aqi_df = aqi_df.rename(columns={"us_aqi": "AQI"})
+    aqi_daily = aqi_df.set_index("time").resample("D").agg({
+        "pm10": "mean",
+        "pm2_5": "mean",
+        "carbon_monoxide": "mean",
+        "nitrogen_dioxide": "mean",
+        "sulphur_dioxide": "mean",
+        "ozone": "mean",
+        "AQI": ["mean", "max"],
+    })
+    aqi_daily.columns = [
+        "_".join(col).strip("_") if isinstance(col, tuple) else col
+        for col in aqi_daily.columns
+    ]
+    aqi_daily = aqi_daily.rename(columns={
+        "pm10_mean": "pm10_mean",
+        "pm2_5_mean": "pm2_5_mean",
+        "carbon_monoxide_mean": "carbon_monoxide_mean",
+        "nitrogen_dioxide_mean": "nitrogen_dioxide_mean",
+        "sulphur_dioxide_mean": "sulphur_dioxide_mean",
+        "ozone_mean": "ozone_mean",
+        "AQI_mean": "AQI",
+        "AQI_max": "AQI_max",
+    })
 
-    combined = pd.concat([weather_df, aqi_df[["AQI", "pm2_5"]]], axis=1)
-    combined = combined[["AQI", "pm2_5", "temperature_2m", "relative_humidity_2m", "wind_speed_10m"]]
+    combined = pd.concat([weather_daily, aqi_daily], axis=1)
+    combined["pm2_5"] = combined["pm2_5_mean"]
+    combined["AQI"] = combined["AQI"]
     combined = combined.dropna()
     if len(combined) < 35:
         raise ValueError("Not enough historical daily data available for lag/rolling feature construction.")
@@ -588,7 +530,7 @@ def fetch_forecast_weather(lat, lon, horizon_days=5):
     forecast_params = {
         "latitude": lat,
         "longitude": lon,
-        "hourly": "temperature_2m,relative_humidity_2m,wind_speed_10m",
+        "hourly": "temperature_2m,relative_humidity_2m,pressure_msl,wind_speed_10m",
         "forecast_days": horizon_days,
         "timezone": "auto",
     }
@@ -611,11 +553,11 @@ def build_feature_vector(historical, forecast_daily, feature_names):
         raise ValueError("Latest historical date missing from assembled daily data.")
     latest_row = latest_row.iloc[0]
 
-    def get_lag(name, lag):
+    def get_lag(column_name, lag):
         date = latest_date - timedelta(days=lag)
         if date not in historical.index.date:
             raise ValueError(f"Missing historical data for lag {lag} days ago ({date}).")
-        return historical.loc[historical.index.date == date].iloc[0][name]
+        return historical.loc[historical.index.date == date].iloc[0][column_name]
 
     def get_roll(stat, window):
         series = historical["AQI"].shift(1).rolling(window=window)
@@ -626,28 +568,51 @@ def build_feature_vector(historical, forecast_daily, feature_names):
 
     feature_vector = []
     for feature in feature_names:
-        if match := re.match(r"aqi_lag_(\d+)$", feature):
-            feature_vector.append(get_lag("AQI", int(match.group(1))))
-        elif match := re.match(r"pm25_lag_(\d+)$", feature):
-            feature_vector.append(get_lag("pm2_5", int(match.group(1))))
-        elif match := re.match(r"temp_lag_(\d+)$", feature):
-            feature_vector.append(get_lag("temperature_2m", int(match.group(1))))
-        elif match := re.match(r"aqi_roll_(mean|max|min|std)_(\d+)$", feature):
-            stat = match.group(1)
+        feature_key = feature.strip()
+
+        if re.match(r"(?i)^aqi_lag_(\d+)$", feature_key):
+            feature_vector.append(get_lag("AQI", int(re.search(r"(\d+)$", feature_key).group(1))))
+        elif re.match(r"(?i)^pm25_lag_(\d+)$", feature_key):
+            feature_vector.append(get_lag("pm2_5", int(re.search(r"(\d+)$", feature_key).group(1))))
+        elif re.match(r"(?i)^temp_lag_(\d+)$", feature_key):
+            feature_vector.append(get_lag("temperature_2m", int(re.search(r"(\d+)$", feature_key).group(1))))
+        elif re.match(r"(?i)^aqi_roll_(mean|max|min|std|avg)_(\d+)$", feature_key):
+            match = re.match(r"(?i)^aqi_roll_(mean|max|min|std|avg)_(\d+)$", feature_key)
+            stat = match.group(1).lower()
+            if stat == "avg":
+                stat = "mean"
             window = int(match.group(2))
             feature_vector.append(get_roll(stat, window))
-        elif feature == "sin_day":
+        elif re.match(r"(?i)^AQI_rolling_(\d+)d_(avg|mean|max|min|std)$", feature_key):
+            match = re.match(r"(?i)^AQI_rolling_(\d+)d_(avg|mean|max|min|std)$", feature_key)
+            stat = match.group(2).lower()
+            if stat == "avg":
+                stat = "mean"
+            window = int(match.group(1))
+            feature_vector.append(get_roll(stat, window))
+        elif feature_key in ["sin_day", "day_of_year_sin", "doy_sin"]:
             day_of_year = latest_date.timetuple().tm_yday
             feature_vector.append(np.sin(2 * np.pi * day_of_year / 365.25))
-        elif feature == "cos_day":
+        elif feature_key in ["cos_day", "day_of_year_cos", "doy_cos"]:
             day_of_year = latest_date.timetuple().tm_yday
             feature_vector.append(np.cos(2 * np.pi * day_of_year / 365.25))
-        elif feature == "month":
+        elif feature_key in ["month", "month_number"]:
             feature_vector.append(latest_date.month)
-        elif feature == "dayofweek":
+        elif feature_key in ["dayofweek", "day_of_week"]:
             feature_vector.append(latest_date.weekday())
-        elif match := re.match(r"(temp|humidity|wind)_future_h(\d+)$", feature):
-            kind = match.group(1)
+        elif feature_key in ["day_of_year"]:
+            feature_vector.append(latest_date.timetuple().tm_yday)
+        elif feature_key in ["month_sin"]:
+            feature_vector.append(np.sin(2 * np.pi * latest_date.month / 12))
+        elif feature_key in ["month_cos"]:
+            feature_vector.append(np.cos(2 * np.pi * latest_date.month / 12))
+        elif feature_key in ["AQI_change_rate"]:
+            current = latest_row["AQI"]
+            prev = historical.loc[historical.index.date == (latest_date - timedelta(days=1))].iloc[0]["AQI"] if (latest_date - timedelta(days=1)) in historical.index.date else current
+            feature_vector.append(float(current - prev))
+        elif re.match(r"(?i)^(temp|humidity|wind)_future_h(\d+)$", feature_key):
+            match = re.match(r"(?i)^(temp|humidity|wind)_future_h(\d+)$", feature_key)
+            kind = match.group(1).lower()
             horiz = int(match.group(2))
             target_date = latest_date + timedelta(days=horiz)
             if target_date not in forecast_daily.index.date:
@@ -659,6 +624,47 @@ def build_feature_vector(historical, forecast_daily, feature_names):
                 feature_vector.append(weather_row["relative_humidity_2m"])
             else:
                 feature_vector.append(weather_row["wind_speed_10m"])
+        elif re.match(r"(?i)^fcst_(temperature_2m|relative_humidity_2m|pressure_msl|wind_speed_10m)_(mean|max|min)_h(\d+)$", feature_key):
+            match = re.match(r"(?i)^fcst_(temperature_2m|relative_humidity_2m|pressure_msl|wind_speed_10m)_(mean|max|min)_h(\d+)$", feature_key)
+            kind = match.group(1).lower()
+            stat = match.group(2).lower()
+            horiz = int(match.group(3))
+            target_date = latest_date + timedelta(days=horiz)
+            if target_date not in forecast_daily.index.date:
+                raise ValueError(f"Forecast weather not available for {target_date}.")
+            weather_row = forecast_daily.loc[forecast_daily.index.date == target_date].iloc[0]
+            if kind == "temperature_2m":
+                feature_vector.append(weather_row["temperature_2m"])
+            elif kind == "relative_humidity_2m":
+                feature_vector.append(weather_row["relative_humidity_2m"])
+            elif kind == "pressure_msl":
+                feature_vector.append(weather_row.get("pressure_msl", weather_row.get("pressure_msl_mean", 1013.0)))
+            else:
+                feature_vector.append(weather_row["wind_speed_10m"])
+        elif re.match(r"(?i)^fcst_precipitation_sum_h(\d+)$", feature_key):
+            horiz = int(re.match(r"(?i)^fcst_precipitation_sum_h(\d+)$", feature_key).group(1))
+            target_date = latest_date + timedelta(days=horiz)
+            if target_date not in forecast_daily.index.date:
+                raise ValueError(f"Forecast weather not available for {target_date}.")
+            weather_row = forecast_daily.loc[forecast_daily.index.date == target_date].iloc[0]
+            feature_vector.append(weather_row.get("precipitation", 0.0))
+        elif feature_key in historical.columns:
+            feature_vector.append(latest_row[feature_key])
+        elif feature_key.replace("_mean", "") in historical.columns:
+            feature_vector.append(latest_row[feature_key.replace("_mean", "")])
+        elif feature_key.replace("_max", "") in historical.columns:
+            feature_vector.append(latest_row[feature_key.replace("_max", "")])
+        elif feature_key.replace("_min", "") in historical.columns:
+            feature_vector.append(latest_row[feature_key.replace("_min", "")])
+        elif feature_key in ["AQI_lag1", "AQI_lag2", "AQI_lag3", "AQI_lag5", "AQI_lag7", "AQI_lag14"]:
+            lag = int(feature_key.split("AQI_lag")[1])
+            feature_vector.append(get_lag("AQI", lag))
+        elif feature_key in ["pm2_5_lag1", "pm2_5_lag2", "pm2_5_lag3", "pm2_5_lag5", "pm2_5_lag7", "pm2_5_lag14"]:
+            lag = int(feature_key.split("pm2_5_lag")[1])
+            feature_vector.append(get_lag("pm2_5", lag))
+        elif feature_key in ["temperature_2m_lag1", "temperature_2m_lag2", "temperature_2m_lag3", "temperature_2m_lag5", "temperature_2m_lag7", "temperature_2m_lag14"]:
+            lag = int(feature_key.split("temperature_2m_lag")[1])
+            feature_vector.append(get_lag("temperature_2m_mean", lag))
         else:
             raise ValueError(f"Unknown feature name: {feature}")
 
@@ -707,7 +713,7 @@ def fetch_live_weather_and_aqi():
 
     return data
 
-# --- 2. HOPSWORKS MODEL LOADING WITH SAFELY UNPACKED MODEL OBJECT ---
+# --- 2. MODEL LOADING WITH LOCAL FALLBACK ---
 @st.cache_resource(show_spinner="Hopsworks Registry se Models download aur extract ho rahe hain...")
 def load_all_models(key):
     project = hopsworks.login(
@@ -738,7 +744,7 @@ def load_all_models(key):
                 elif file.endswith(".pkl") or file.endswith(".joblib"):
                     if file == "features.pkl":
                         continue
-                    raw_obj = safe_joblib_load(file_path)
+                    raw_obj = joblib.load(file_path)
                     extracted = extract_model(raw_obj)
                     if extracted is not None:
                         model_obj = extracted
@@ -757,176 +763,100 @@ def load_all_models(key):
 
     return models_dict
 
-models = None
-# Defer loading models until a user action to avoid startup crashes during unpickle errors.
-import tempfile
-import zipfile
-import tarfile
-import shutil
 
-MODEL_ARTIFACTS_INFO = [
-    ("sargodha_aqi_gbr_day1", 4, "Day 1"),
-    ("sargodha_aqi_gbr_day2", 3, "Day 2"),
-    ("sargodha_aqi_gbr_day3", 3, "Day 3"),
-]
-
-
-def _download_and_extract(url, dest_dir):
-    """Download a single artifact and extract into dest_dir. Returns path to extracted folder or raises."""
-    r = requests.get(url, stream=True, timeout=60)
-    r.raise_for_status()
-    fname = url.split("/")[-1]
-    local_path = os.path.join(dest_dir, fname)
-    with open(local_path, "wb") as fh:
-        for chunk in r.iter_content(chunk_size=8192):
-            if chunk:
-                fh.write(chunk)
-    # Try to extract
+def regenerate_local_fallback_models():
+    """Rebuild compatible local artifacts when all saved pickles are legacy/invalid."""
     try:
-        if zipfile.is_zipfile(local_path):
-            with zipfile.ZipFile(local_path, "r") as z:
-                z.extractall(dest_dir)
-            return dest_dir
-        elif tarfile.is_tarfile(local_path):
-            with tarfile.open(local_path, "r:*") as t:
-                t.extractall(dest_dir)
-            return dest_dir
-        else:
-            # Not an archive; if it's a single joblib/pkl, create a folder and move
-            single_dir = os.path.join(dest_dir, os.path.splitext(fname)[0])
-            os.makedirs(single_dir, exist_ok=True)
-            shutil.move(local_path, os.path.join(single_dir, fname))
-            return single_dir
-    finally:
-        # keep local_path for debugging if needed
-        pass
+        from retrain import load_raw_data, build_feature_dataframe, train_and_upload_models
+        raw_df = load_raw_data()
+        daily_v2 = build_feature_dataframe(raw_df)
+        train_and_upload_models(daily_v2, mr=None)
+        return True
+    except Exception:
+        return False
 
 
-def _load_models_from_dir(model_dir_root):
-    models_dict = {}
-    for m_name, m_ver, label in MODEL_ARTIFACTS_INFO:
-        # Look for a folder named after the model, or scan for files
-        model_obj = None
-        feature_names = None
-        # First check a subfolder
-        candidate_dirs = [
-            os.path.join(model_dir_root, m_name),
-            model_dir_root,
-        ]
-        for search_dir in candidate_dirs:
-            if not os.path.isdir(search_dir):
+def load_local_fallback_models():
+    local_root = Path(__file__).resolve().parent / "retrain_artifacts"
+    if not local_root.exists():
+        raise FileNotFoundError(f"Local fallback directory not found: {local_root}")
+
+    model_labels = {
+        "Day 1": "sargodha_aqi_gbr_day1",
+        "Day 2": "sargodha_aqi_gbr_day2",
+        "Day 3": "sargodha_aqi_gbr_day3",
+    }
+
+    fallback_models = {}
+    for label, model_prefix in model_labels.items():
+        candidates = []
+        for artifact_dir in sorted(local_root.glob(f"{model_prefix}_*")):
+            model_file = artifact_dir / "model.pkl"
+            feature_file = artifact_dir / "features.pkl"
+            if not model_file.exists() or not feature_file.exists():
                 continue
-            for root, dirs, files in os.walk(search_dir):
-                for file in files:
-                    file_path = os.path.join(root, file)
-                    if file == "features.pkl":
-                        try:
-                            feature_names = joblib.load(file_path)
-                        except Exception:
-                            pass
-                    elif file.endswith(".pkl") or file.endswith(".joblib"):
-                        if file == "features.pkl":
-                            continue
-                        try:
-                            raw_obj = safe_joblib_load(file_path)
-                            extracted = extract_model(raw_obj)
-                            if extracted is not None:
-                                model_obj = extracted
-                        except Exception:
-                            # ignore and continue to try other files
-                            pass
-                if model_obj is not None and feature_names is not None:
-                    break
-            if model_obj is not None and feature_names is not None:
-                break
 
-        if model_obj is None or feature_names is None:
-            raise ValueError(f"Could not find usable model and features for {m_name} in {model_dir_root}")
+            feature_names = load_pickle_compat(feature_file)
+            raw_obj = load_pickle_compat(model_file)
+            if feature_names is None or raw_obj is None:
+                continue
 
-        models_dict[label] = {"model": model_obj, "features": feature_names}
-    return models_dict
+            extracted = extract_model(raw_obj)
+            if extracted is not None:
+                candidates.append({
+                    "path": artifact_dir,
+                    "model": extracted,
+                    "features": feature_names,
+                })
+
+        if not candidates:
+            if not regenerate_local_fallback_models():
+                raise ValueError(f"No valid local fallback artifact found for {model_prefix}.")
+            for artifact_dir in sorted(local_root.glob(f"{model_prefix}_*")):
+                model_file = artifact_dir / "model.pkl"
+                feature_file = artifact_dir / "features.pkl"
+                if not model_file.exists() or not feature_file.exists():
+                    continue
+                feature_names = load_pickle_compat(feature_file)
+                raw_obj = load_pickle_compat(model_file)
+                if feature_names is None or raw_obj is None:
+                    continue
+                extracted = extract_model(raw_obj)
+                if extracted is not None:
+                    candidates.append({
+                        "path": artifact_dir,
+                        "model": extracted,
+                        "features": feature_names,
+                    })
+
+        if not candidates:
+            raise ValueError(f"No valid local fallback artifact found for {model_prefix} after regeneration.")
+
+        latest = max(candidates, key=lambda item: item["path"].name)
+        fallback_models[label] = {
+            "model": latest["model"],
+            "features": latest["features"],
+        }
+
+    return fallback_models
 
 
+models = None
 if api_key:
-    st.sidebar.markdown("### 🔁 Model Loading")
-    if not HOPSWORKS_AVAILABLE:
-        st.sidebar.warning(
-            "Hopsworks client not installed in this environment. Models cannot be loaded from Hopsworks here."
-        )
-        st.sidebar.markdown(
-            "If you need model loading in this Cloud deployment, either install `hopsworks` in the environment (not recommended on Streamlit Cloud), "
-            "or provide model artifacts via a public URL so the app can download them without the hopsworks client."
-        )
-
-        # New: allow users to provide a base URL for model artifacts (or exact per-model URLs)
-        st.sidebar.markdown("#### Alternative: Download model artifacts from URL")
-        artifacts_base = st.sidebar.text_input(
-            "Model artifacts base URL (use {model} in the path; e.g. https://example.com/artifacts/{model}.zip)",
-            value="",
-            placeholder="https://raw.githubusercontent.com/<user>/<repo>/main/artifacts/{model}.zip",
-            key="artifacts_base_url",
-        )
-        if artifacts_base:
-            st.sidebar.caption("You can use the token {model} in the URL; it will be replaced with each model name.")
-            if st.sidebar.button("Download models from URL"):
-                with st.sidebar.spinner("Downloading model artifacts..."):
-                    tmp = tempfile.mkdtemp(prefix="models_")
-                    try:
-                        # For each model, format URL and attempt download/extract
-                        for m_name, m_ver, label in MODEL_ARTIFACTS_INFO:
-                            attempt_url = artifacts_base.replace("{model}", m_name)
-                            try:
-                                _download_and_extract(attempt_url, tmp)
-                            except Exception as e:
-                                st.sidebar.error(f"Failed to download/extract for {m_name}: {e}")
-                                raise
-                        # Now try to load models from the tmp dir
-                        models = _load_models_from_dir(tmp)
-                        st.sidebar.success("✅ Models downloaded and loaded from provided URLs.")
-                    except Exception as e:
-                        st.sidebar.error(f"Model download/load failed: {e}")
-                        models = None
-                    finally:
-                        # keep tmp for debugging; do not remove automatically
-                        st.sidebar.info(f"Downloaded artifacts stored at: {tmp}")
-
-        # Offer an on-demand installer when the user explicitly requests it. This may take time and can fail due to permission or dependency conflicts.
-        if st.sidebar.button("Install hopsworks now (attempt runtime pip install)"):
-            with st.sidebar.spinner("Installing hopsworks (this may take a minute)..."):
-                import subprocess, sys
-                try:
-                    cmd = [sys.executable, "-m", "pip", "install", "--upgrade", "hopsworks==5.0.*"]
-                    proc = subprocess.run(cmd, capture_output=True, text=True)
-                    out = (proc.stdout or "") + "\n" + (proc.stderr or "")
-                    if proc.returncode == 0:
-                        try:
-                            import importlib
-                            hopsworks = importlib.import_module("hopsworks")
-                            HOPSWORKS_AVAILABLE = True
-                            st.sidebar.success("hopsworks installed and imported successfully. You can now click 'Load models from Hopsworks'.")
-                        except Exception as e:
-                            st.sidebar.error(f"Installed but import failed: {e}")
-                            st.sidebar.text(out)
-                    else:
-                        st.sidebar.error("Installation failed; see details below.")
-                        st.sidebar.text(out)
-                except Exception as e:
-                    st.sidebar.error(f"Installation attempt raised an exception: {e}")
-    else:
-        if st.sidebar.button("Load models from Hopsworks"):
-            with st.sidebar.spinner("Loading models from Hopsworks..."):
-                try:
-                    models = load_all_models(api_key)
-                    st.sidebar.success("✅ Day 1, 2, 3 Models Ready!")
-                except Exception as e:
-                    # Don't show full traceback to avoid long crashes in the UI; log concise message and continue.
-                    st.sidebar.error("Failed to load models from Hopsworks. The app will run in offline mode.")
-                    st.sidebar.text(str(e))
-                    models = None
-        else:
-            st.sidebar.info("Models are not loaded. Click 'Load models from Hopsworks' to attempt loading.")
+    try:
+        models = load_all_models(api_key)
+        st.sidebar.success("✅ Day 1, 2, 3 Models Ready!")
+    except Exception as e:
+        st.sidebar.warning(f"Hopsworks model load failed ({e}). Falling back to local retrained artifacts...")
+        try:
+            models = load_local_fallback_models()
+            st.sidebar.success("✅ Local fallback models loaded successfully.")
+        except Exception as local_err:
+            st.sidebar.error(f"Error loading models: {local_err}")
+            import traceback
+            st.sidebar.code(traceback.format_exc())
 else:
-    st.sidebar.warning("⚠️ HOPSWORKS_API_KEY not found. Set it in .env, Streamlit secrets, or paste it here.")
+    st.info("👈 HOPSWORKS_API_KEY set nahi hai. Terminal me export karo ya project root me .env file create karo.")
 
 # --- 3. LIVE DATA UI ---
 st.markdown("### 📡 Live Weather & Air Quality — Sargodha")
@@ -971,26 +901,17 @@ if run_forecast:
                 forecast_daily = fetch_forecast_weather(LATITUDE, LONGITUDE, horizon_days=5)
 
                 preds = []
-                x_vectors = {}  # keep feature vectors for SHAP, keyed by day label
                 for label in ["Day 1", "Day 2", "Day 3"]:
                     model_info = models[label]
                     model = model_info["model"]
                     feature_names = model_info["features"]
                     x_vec = build_feature_vector(historical, forecast_daily, feature_names)
-                    x_vectors[label] = x_vec
                     preds.append(float(model.predict(x_vec)[0]))
-
-            # stash results in session_state so the SHAP expander below can reuse them
-            # without re-fetching data on every rerun
-            st.session_state["last_preds"] = preds
-            st.session_state["last_x_vectors"] = x_vectors
-            st.session_state["last_historical"] = historical
 
             today = datetime.now()
             dates = [(today + timedelta(days=i + 1)) for i in range(3)]
             date_labels = [d.strftime("%d %b (%a)") for d in dates]
             preds = [round(v, 1) for v in preds]
-            st.session_state["last_date_labels"] = date_labels
 
             # ---------------- HAZARD BANNER ----------------
             max_aqi = max(preds)
@@ -1041,12 +962,7 @@ if run_forecast:
             gcols = st.columns(3)
             for i, col in enumerate(gcols):
                 with col:
-                    fig = aqi_gauge_chart(preds[i], f"Day {i+1} — {date_labels[i]}")
-                    if PLOTLY_AVAILABLE and fig is not None:
-                        st.plotly_chart(fig, use_container_width=True)
-                    else:
-                        label, color, emoji, _ = get_aqi_category(preds[i])
-                        st.markdown(f"**Day {i+1} — {date_labels[i]}:** {preds[i]:.0f} — {emoji} {label}")
+                    st.plotly_chart(aqi_gauge_chart(preds[i], f"Day {i+1} — {date_labels[i]}"), use_container_width=True)
 
             # ---------------- TREND CHART: HISTORY + FORECAST ----------------
             st.markdown("### 📈 AQI Trend — Last 14 Days + 3-Day Model Forecast")
@@ -1055,54 +971,48 @@ if run_forecast:
             hist_dates = list(hist_tail.index.date)
             hist_values = list(hist_tail["AQI"].values)
 
+            trend_fig = go.Figure()
+
+            # Historical actual AQI
+            trend_fig.add_trace(go.Scatter(
+                x=hist_dates,
+                y=hist_values,
+                mode="lines+markers",
+                name="Historical AQI",
+                line=dict(color="#5dade2", width=3),
+                marker=dict(size=6),
+            ))
+
+            # Bridge point connecting history to forecast
             bridge_x = [hist_dates[-1]] + [d.date() for d in dates]
             bridge_y = [hist_values[-1]] + preds
 
-            if PLOTLY_AVAILABLE:
-                trend_fig = go.Figure()
+            trend_fig.add_trace(go.Scatter(
+                x=bridge_x,
+                y=bridge_y,
+                mode="lines+markers",
+                name="Model Forecast",
+                line=dict(color="#f39c12", width=3, dash="dash"),
+                marker=dict(size=10, symbol="diamond"),
+            ))
 
-                # Historical actual AQI
-                trend_fig.add_trace(go.Scatter(
-                    x=hist_dates,
-                    y=hist_values,
-                    mode="lines+markers",
-                    name="Historical AQI",
-                    line=dict(color="#5dade2", width=3),
-                    marker=dict(size=6),
-                ))
+            # Hazard threshold reference lines
+            for level, color, name in [(100, "#f1c40f", "Moderate"), (150, "#e67e22", "Unhealthy (Sensitive)"),
+                                        (200, "#e74c3c", "Unhealthy"), (300, "#8e44ad", "Very Unhealthy")]:
+                trend_fig.add_hline(y=level, line_dash="dot", line_color=color, opacity=0.5,
+                                     annotation_text=name, annotation_font_color=color, annotation_font_size=10)
 
-                trend_fig.add_trace(go.Scatter(
-                    x=bridge_x,
-                    y=bridge_y,
-                    mode="lines+markers",
-                    name="Model Forecast",
-                    line=dict(color="#f39c12", width=3, dash="dash"),
-                    marker=dict(size=10, symbol="diamond"),
-                ))
-
-                # Hazard threshold reference lines
-                for level, color, name in [(100, "#f1c40f", "Moderate"), (150, "#e67e22", "Unhealthy (Sensitive)"),
-                                            (200, "#e74c3c", "Unhealthy"), (300, "#8e44ad", "Very Unhealthy")]:
-                    trend_fig.add_hline(y=level, line_dash="dot", line_color=color, opacity=0.5,
-                                         annotation_text=name, annotation_font_color=color, annotation_font_size=10)
-
-                trend_fig.update_layout(
-                    paper_bgcolor="rgba(0,0,0,0)",
-                    plot_bgcolor="rgba(255,255,255,0.02)",
-                    font=dict(color="#dfe9f3"),
-                    legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
-                    margin=dict(l=10, r=10, t=40, b=10),
-                    xaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="Date"),
-                    yaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="AQI"),
-                    height=420,
-                )
-                st.plotly_chart(trend_fig, use_container_width=True)
-            else:
-                # Fallback: show a simple line chart with Streamlit if plotly isn't available
-                bridge_df = pd.DataFrame({"Date": bridge_x, "AQI": bridge_y})
-                bridge_df["Date"] = pd.to_datetime(bridge_df["Date"]).dt.date
-                bridge_df = bridge_df.set_index("Date")
-                st.line_chart(bridge_df["AQI"])
+            trend_fig.update_layout(
+                paper_bgcolor="rgba(0,0,0,0)",
+                plot_bgcolor="rgba(255,255,255,0.02)",
+                font=dict(color="#dfe9f3"),
+                legend=dict(orientation="h", yanchor="bottom", y=1.02, xanchor="right", x=1),
+                margin=dict(l=10, r=10, t=40, b=10),
+                xaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="Date"),
+                yaxis=dict(gridcolor="rgba(255,255,255,0.06)", title="AQI"),
+                height=420,
+            )
+            st.plotly_chart(trend_fig, use_container_width=True)
 
             # ---------------- RAW TABLE ----------------
             with st.expander("📋 View Raw Forecast Table"):
@@ -1115,77 +1025,3 @@ if run_forecast:
 
         except Exception as err:
             st.error(f"Prediction Error: {err}")
-
-# ============================================================
-# 5. SHAP EXPLAINABILITY SECTION
-# Renders using the last forecast run (stored in session_state),
-# so it survives Streamlit reruns without recomputing predictions.
-# ============================================================
-if "last_preds" in st.session_state and models:
-    st.divider()
-    st.markdown("### 🔍 Why did the model predict this? (SHAP Explainability)")
-    st.caption(
-        "Each bar shows how much a feature pushed the predicted AQI up (red) or down (green) "
-        "compared to the model's average prediction, for the selected day."
-    )
-
-    with st.expander("📊 View SHAP Feature Contributions", expanded=False):
-        day_choice = st.radio(
-            "Select forecast day",
-            options=["Day 1", "Day 2", "Day 3"],
-            horizontal=True,
-            key="shap_day_choice",
-        )
-
-        day_idx = int(day_choice.split(" ")[1]) - 1
-        model_info = models[day_choice]
-        model = model_info["model"]
-        feature_names = model_info["features"]
-        x_vec = st.session_state["last_x_vectors"][day_choice]
-        pred_value = st.session_state["last_preds"][day_idx]
-        date_label = st.session_state["last_date_labels"][day_idx]
-
-        try:
-            with st.spinner("Computing SHAP values..."):
-                contrib_df, base_value = compute_shap_for_day(model, feature_names, x_vec)
-
-            top_n = min(10, len(contrib_df))
-            shap_fig = shap_bar_chart(contrib_df, f"Top {top_n} Feature Contributions — {day_choice} ({date_label})", top_n=top_n)
-            if PLOTLY_AVAILABLE and shap_fig is not None:
-                st.plotly_chart(shap_fig, use_container_width=True)
-            else:
-                # Fallback: show table of top contributions
-                st.write(contrib_df.head(top_n)[["feature","shap_value"]].rename(columns={"feature":"Feature","shap_value":"SHAP Contribution"}).reset_index(drop=True))
-
-            c1, c2, c3 = st.columns(3)
-            with c1:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">Model Base Value</div>
-                    <div class="metric-value">{base_value:.1f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with c2:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">Sum of Contributions</div>
-                    <div class="metric-value">{contrib_df['shap_value'].sum():.1f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-            with c3:
-                st.markdown(f"""
-                <div class="metric-card">
-                    <div class="metric-label">Final Prediction</div>
-                    <div class="metric-value">{pred_value:.1f}</div>
-                </div>
-                """, unsafe_allow_html=True)
-
-            with st.expander("📋 View Full Feature Contribution Table"):
-                display_df = contrib_df[["feature", "shap_value"]].reset_index(drop=True)
-                display_df.columns = ["Feature", "SHAP Contribution"]
-                st.dataframe(display_df, use_container_width=True, hide_index=True)
-
-        except Exception as shap_err:
-            st.error(f"SHAP computation error: {shap_err}")
-else:
-    st.caption("Run a forecast above to unlock SHAP explainability.")
