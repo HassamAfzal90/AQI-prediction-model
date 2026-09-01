@@ -8,7 +8,13 @@ import re
 import sys
 import types
 import requests
-import shap
+try:
+    import shap
+    SHAP_AVAILABLE = True
+except Exception:
+    shap = None
+    SHAP_AVAILABLE = False
+# Redeploy trigger: update to force Streamlit Cloud rebuild
 import plotly.graph_objects as go
 from requests.adapters import HTTPAdapter
 from urllib3.util.retry import Retry
