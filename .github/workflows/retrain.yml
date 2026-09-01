@@ -31,15 +31,18 @@ jobs:
             exit 1
           fi
 
-      - name: Install dependencies
+      - name: Install dependencies (uninstall old versions first)
         run: |
           python -m pip install --upgrade pip
+          # Uninstall potentially preinstalled older packages to avoid mismatches
+          python -m pip uninstall -y hopsworks hsml hsfs || true
           python -m pip install --upgrade -r requirements.txt
           python -m pip install --upgrade "hopsworks==5.0.*"
 
-      - name: Verify dependencies
+      - name: Verify dependencies (show installed versions)
         run: |
-          python -c "import hopsworks, joblib, numpy, pandas, requests, sklearn; print('Dependencies loaded successfully'); print('Hopsworks version:', hopsworks.__version__)"
+          python -c "import hopsworks, hsml, hsfs, joblib, numpy, pandas, requests, sklearn; print('Dependencies loaded successfully'); print('hopsworks:', getattr(hopsworks,'__version__',None)); print('hsml:', getattr(hsml,'__version__',None)); print('hsfs:', getattr(hsfs,'__version__',None))"
+          python -m pip show hopsworks hsml hsfs || true
 
       - name: Run retraining script
         env:
