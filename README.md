@@ -241,25 +241,32 @@ The notebook uses SHAP on the trained model and analyses the feature contributio
 
 ## Retraining pipeline (`retrain.py`)
 
-The project includes a dedicated retraining pipeline that automates training and model registration.
+The project includes a dedicated automated retraining pipeline that runs every Sunday and registers a new Hopsworks model version only when the retrained model is actually better.
+
+### Automated schedule
+The GitHub Actions workflow in [.github/workflows/retrain.yml](.github/workflows/retrain.yml) is configured with a weekly cron trigger:
+
+- `0 0 * * 0` = every Sunday at 00:00 UTC
+- manual runs are also supported via `workflow_dispatch`
 
 ### Retraining flow
 `retrain.py` does the following:
 
-1. Loads or fetches raw historical weather and AQI data
+1. Loads raw historical weather and AQI data
 2. Builds the daily feature dataset
 3. Creates engineered features matching the notebook pipeline
 4. Trains separate Gradient Boosting models for Day 1, Day 2, and Day 3
-5. Compares the new metrics against existing Hopsworks versions
-6. Uploads new versions only if they improve the current model
-7. Saves artifacts to `retrain_artifacts/`
+5. Compares the new metrics against the current Hopsworks model versions
+6. Registers a new version only if the model improves on the existing metric baseline
+7. Saves trained artifacts to `retrain_artifacts/`
 
 ### Important model-management behavior
-The script is designed to be conservative:
+The script is intentionally conservative:
 
 - it does not upload a new model if the metrics do not improve
-- it keeps registry history clean
-- it exposes versioned model artifacts for easier rollback and comparison
+- it keeps the registry history clean and versioned
+- it preserves rollback-friendly artifacts for comparison and inspection
+- if Hopsworks login fails, it logs the issue and still saves the trained model locally instead of crashing
 
 ### Artifact names
 The retraining system writes model artifacts like:
@@ -273,6 +280,8 @@ These are then registered with Hopsworks by model name:
 - `sargodha_aqi_gbr_day1`
 - `sargodha_aqi_gbr_day2`
 - `sargodha_aqi_gbr_day3`
+
+This is the expected production behavior: the model is retrained automatically every Sunday, and a new improved version is saved to Hopsworks when the score is better than the current one.
 
 ---
 
@@ -298,26 +307,26 @@ This project is designed for deployment on Streamlit Community Cloud. The app is
 
 ---
 
-## Hopsworks dependency and trigger caveats
+## Hopsworks dependency and operational notes
 
-The project depends on both Hopsworks and the ML stack, and this creates real production risks:
+The project depends on both Hopsworks and the ML stack, so the operating environment must stay consistent:
 
 - Hopsworks API versions can change across environments
 - model registry serialization may differ across scikit-learn / NumPy versions
-- older pickles may fail if a newer environment is used without compatibility handling
-- scheduled retraining or automation can fail if dependency versions drift or the API key is invalid
+- older pickles can fail if a newer environment is used without compatibility handling
+- scheduled retraining requires a valid `HOPSWORKS_API_KEY` and correct registry access
 
 This project already includes compatibility handling to reduce breakage from older scikit-learn pickle formats, including a compatibility shim for the legacy `_loss` module in [app.py](app.py).
 
-### Why auto triggers sometimes fail
-The automated trigger may fail because:
+### Operational requirements for the scheduled pipeline
+The automated workflow is intended to run cleanly when:
 
-- package version mismatches in GitHub Actions or Cloud environments
-- model registry access issues caused by stale or expired Hopsworks credentials
-- incompatibility between the saved model object and the runtime environment
-- different dependency locks between local development and deployment environments
+- the GitHub Actions environment has the required Python and package versions
+- the Hopsworks API key is valid and not expired
+- the model registry is reachable from the workflow environment
+- the retrained model actually improves the current baseline metric
 
-This means the app may still work locally, but retraining automation can fail if environment parity is not maintained carefully.
+When those conditions are met, the Sunday retrain runs as designed and saves improved models to Hopsworks. If no improvement is found, the script skips registration and keeps the new model only as a local artifact for review.
 
 ---
 
