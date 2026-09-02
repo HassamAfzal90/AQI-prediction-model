@@ -25,7 +25,7 @@ The app is meant for monitoring pollution risk, highlighting vulnerable periods,
 
 Live deployment link:
 
-- Streamlit app: [[https://your-app-name.streamlit.app](https://aqi-prediction-model-irbmq239pwxeqmbz6emxuv.streamlit.app/)](https://aqi-prediction-model-9t6xkwfuyapxj7jtkdv38x.streamlit.app/)
+- Streamlit app: https://aqi-prediction-model-9t6xkwfuyapxj7jtkdv38x.streamlit.app/
 
 
 ## Dashboard Preview
