@@ -189,7 +189,7 @@ The notebook experiments and model registry workflow report the following approx
 
 These values indicate that the model is reasonably capable of carrying short-term AQI dynamics, with the Day 2 configuration being the strongest in the recorded benchmark run.
 
-> Note: these metrics reflect the notebook/model-registry evaluation runs and may vary slightly with retraining data and package versions.
+
 
 ---
 
