@@ -4,7 +4,8 @@ numpy
 xgboost
 scikit-learn
 joblib
+shap
+matplotlib
 hopsworks==5.0.3
 plotly
 python-dotenv
-shap

@@ -2,8 +2,7 @@ numpy==1.26.4
 pandas==2.1.4
 scikit-learn==1.5.2
 joblib==1.4.2
+shap
+matplotlib
 requests==2.32.3
-plotly==5.18.0
-streamlit==1.62.0
-setuptools>=67.0.0
-wheel>=0.40.0
+hopsworks==5.0.3
