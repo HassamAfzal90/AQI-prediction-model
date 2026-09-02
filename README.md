@@ -183,9 +183,9 @@ The notebook experiments and model registry workflow report the following approx
 
 | Horizon | Model | RMSE | R² | Notes |
 |---|---|---:|---:|---|
-| Day 1 | Gradient Boosting Regressor | 25.21 | 0.706 | Good short-term predictive strength |
-| Day 2 | Gradient Boosting Regressor | 24.49 | 0.715 | Best overall R² among the three horizons |
-| Day 3 | Gradient Boosting Regressor | 24.97 | 0.701 | Stable 3-day trend forecasting |
+| Day 1 | Gradient Boosting Regressor | 12.15 | 0.806 | Good short-term predictive strength |
+| Day 2 | Gradient Boosting Regressor | 23.08 | 0.719 | Best overall R² among the three horizons |
+| Day 3 | Gradient Boosting Regressor | 23.24 | 0.710 | Stable 3-day trend forecasting |
 
 These values indicate that the model is reasonably capable of carrying short-term AQI dynamics, with the Day 2 configuration being the strongest in the recorded benchmark run.
 
