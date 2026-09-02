@@ -1,3 +1,5 @@
+<img width="1206" height="382" alt="Screenshot 2026-09-02 223610" src="https://github.com/user-attachments/assets/fec222ab-862c-4dce-a024-8b071ce76296" />
+<img width="1206" height="382" alt="Screenshot 2026-09-02 223610" src="https://github.com/user-attachments/assets/dc708f61-3838-4789-aacb-9e27fcaef57e" />
 # Sargodha AQI Prediction Model
 
 A production-style air quality forecasting project for Sargodha, Punjab, Pakistan. The system combines historical weather and AQI data from Open-Meteo with a Hopsworks-managed machine learning pipeline and presents a clean 3-day AQI forecast dashboard in Streamlit.
