@@ -91,21 +91,23 @@ AQI forecast + alerts + interpretability + charts
 
 ```text
 .
-├── app.py                          # Streamlit dashboard
-├── retrain.py                     # Training pipeline and model registry workflow
-├── new.ipynb                      # Notebook experimentation and model analysis
-├── requirements.txt               # Runtime app dependencies
-├── requirements-retrain.txt       # Retraining dependencies
-├── README.md                      # Project documentation
-├── .env                           # Local environment variables (ignored in Git)
-├── .gitignore                     # Git ignore rules
+├── app.py                          # Streamlit interactive dashboard
+├── retrain.py                      # Retraining pipeline & Hopsworks model registry logic
+├── new.ipynb                       # Notebook experimentation and EDA
+├── requirements.txt                # Production app dependencies
+├── requirements-retrain.txt        # Retraining pipeline dependencies
+├── README.md                       # Project documentation
+├── .env                            # Local environment variables (Ignored by Git)
+├── .gitignore                      # Git ignore rules
 ├── docs/
-│   ├── dashboard-preview.png      # Main dashboard screenshot
-│   └── trend-forecast.png        # Forecast chart screenshot
-├── sargodha_raw_data_3yrs (5).csv # Raw historical weather/AQI dataset
-├── sargodha_features_daily_v2.csv # Daily feature-engineered dataset
-├── retrain_artifacts/             # Generated trained model artifacts
+│   ├── dashboard-preview.png       # Dashboard screenshot
+│   └── trend-forecast.png          # Forecast chart screenshot
+├── sargodha_raw_data_3yrs (5).csv  # Raw historical dataset
+├── sargodha_features_daily_v2.csv  # Processed feature-engineered dataset
+├── retrain_artifacts/              # Locally generated model artifacts
 └── .github/
+    └── workflows/
+        └── retrain.yml             # GitHub Actions weekly retraining workflow
   
 ```
 
