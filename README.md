@@ -1,6 +1,6 @@
-<img width="1206" height="382" alt="Screenshot 2026-09-02 223610" src="https://github.com/user-attachments/assets/fec222ab-862c-4dce-a024-8b071ce76296" />
-<img width="1206" height="382" alt="Screenshot 2026-09-02 223610" src="https://github.com/user-attachments/assets/dc708f61-3838-4789-aacb-9e27fcaef57e" />
+
 # Sargodha AQI Prediction Model
+<img width="596" height="335" alt="images (2)" src="https://github.com/user-attachments/assets/ec2b0a68-c7d4-476e-82bb-49f0fc43c9c6" />
 
 A production-style air quality forecasting project for Sargodha, Punjab, Pakistan. The system combines historical weather and AQI data from Open-Meteo with a Hopsworks-managed machine learning pipeline and presents a clean 3-day AQI forecast dashboard in Streamlit.
 
@@ -146,7 +146,7 @@ AQI forecast + alerts + interpretability + charts
 ## Model details
 
 The final production-style deployment uses three separate models, one for each forecast horizon:
-
+<img width="1206" height="382" alt="Screenshot 2026-09-02 223610" src="https://github.com/user-attachments/assets/dc708f61-3838-4789-aacb-9e27fcaef57e" />
 - Day 1 model: `sargodha_aqi_gbr_day1`
 - Day 2 model: `sargodha_aqi_gbr_day2`
 - Day 3 model: `sargodha_aqi_gbr_day3`
@@ -175,6 +175,9 @@ The project explicitly trains and supports these use cases:
 ---
 
 ## Accuracy and validation summary
+
+<img width="1239" height="360" alt="Screenshot 2026-09-02 224430" src="https://github.com/user-attachments/assets/58435be2-c51c-4f82-bd5e-435b52afd5c2" />
+
 
 The notebook experiments and model registry workflow report the following approximate validation metrics for the GBR models:
 
