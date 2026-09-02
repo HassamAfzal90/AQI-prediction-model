@@ -8,7 +8,7 @@ A production-style air quality forecasting project for Sargodha, Punjab, Pakista
 
 This project is designed to answer one practical question:
 
->**** What will the AQI look like over the next 3 days in Sargodha, and which factors are pushing it up or down?****
+> What will the AQI look like over the next 3 days in Sargodha, and which factors are pushing it up or down?
 
 The solution combines:
 
@@ -25,7 +25,7 @@ The app is meant for monitoring pollution risk, highlighting vulnerable periods,
 
 Live deployment link:
 
-- Streamlit app: https://aqi-prediction-model-9t6xkwfuyapxj7jtkdv38x.streamlit.app/
+* **Streamlit App:** [Live AQI Dashboard](https://aqi-prediction-model-9t6xkwfuyapxj7jtkdv38x.streamlit.app/)
 
 
 ## Dashboard Preview
