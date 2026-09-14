@@ -5,6 +5,8 @@
 
 
 
+
+
 A 3-day air quality (AQI) forecasting app for Sargodha, Punjab, Pakistan — built on Open-Meteo weather/AQI data, a Hopsworks-managed ML pipeline, and a Streamlit dashboard.
 
 **Live App:** [AQI Dashboard](https://aqi-prediction-model-9t6xkwfuyapxj7jtkdv38x.streamlit.app/)
