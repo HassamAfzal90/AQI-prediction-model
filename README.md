@@ -2,7 +2,7 @@
 # Sargodha AQI Prediction Model
 <img width="596" height="335" alt="images (2)" src="https://github.com/user-attachments/assets/ec2b0a68-c7d4-476e-82bb-49f0fc43c9c6" />
 
-<<<<<<< Updated upstream
+
 
 
 A 3-day air quality (AQI) forecasting app for Sargodha, Punjab, Pakistan — built on Open-Meteo weather/AQI data, a Hopsworks-managed ML pipeline, and a Streamlit dashboard.
