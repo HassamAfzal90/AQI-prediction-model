@@ -98,4 +98,4 @@ python retrain.py
 ```
 
 The retraining script loads `sargodha_raw_data_3yrs (5).csv` when available, otherwise fetches historical data from Open-Meteo. It creates daily features, trains the three forecast horizons, saves local artifacts under `retrain_artifacts/`, and uploads improved versions to Hopsworks when credentials are available.
->>>>>>> Stashed changes
+
